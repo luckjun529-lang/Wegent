@@ -9,6 +9,7 @@ import { CircleStop } from 'lucide-react'
 import ModelSelector, { Model } from '../selector/ModelSelector'
 import UnifiedRepositorySelector from '../selector/UnifiedRepositorySelector'
 import ChatContextInput from '../chat/ChatContextInput'
+import DingTalkDocButton from '../chat/DingTalkDocButton'
 import AttachmentButton from '../AttachmentButton'
 import SendButton from './SendButton'
 import LoadingDots from '../message/LoadingDots'
@@ -555,12 +556,18 @@ export function ChatInputControls({
             />
 
             {showChatContexts && (
-              <ChatContextInput
-                selectedContexts={selectedContexts}
-                onContextsChange={setSelectedContexts}
-                excludeKnowledgeBaseId={knowledgeBaseId}
-                iconOnly
-              />
+              <>
+                <ChatContextInput
+                  selectedContexts={selectedContexts}
+                  onContextsChange={setSelectedContexts}
+                  excludeKnowledgeBaseId={knowledgeBaseId}
+                  iconOnly
+                />
+                <DingTalkDocButton
+                  selectedContexts={selectedContexts}
+                  onContextsChange={setSelectedContexts}
+                />
+              </>
             )}
 
             <InputMoreActionsMenu

@@ -172,27 +172,24 @@ class TestSyncDingtalkDocs:
     """Tests for POST /dingtalk-docs/sync."""
 
     @patch(
-        "app.api.endpoints.dingtalk_docs.DingTalkDocService.is_configured",
-        return_value=False,
+        "app.api.endpoints.dingtalk_docs.DingTalkDocService.sync_dingtalk_docs",
+        side_effect=ValueError(
+            "DingTalk is not authorized or authorization has expired"
+        ),
     )
-    def test_returns_400_when_not_configured(
-        self, mock_is_configured: MagicMock, dingtalk_client: TestClient
+    def test_returns_400_when_not_authorized(
+        self, mock_sync: MagicMock, dingtalk_client: TestClient
     ) -> None:
-        """Returns 400 when DingTalk MCP is not configured."""
+        """Returns 400 when DingTalk DWS is not authorized."""
         response = dingtalk_client.post("/dingtalk-docs/sync")
 
         assert response.status_code == 400
-        assert "not configured" in response.json()["detail"].lower()
+        assert "not authorized" in response.json()["detail"].lower()
 
-    @patch(
-        "app.api.endpoints.dingtalk_docs.DingTalkDocService.is_configured",
-        return_value=True,
-    )
     @patch("app.api.endpoints.dingtalk_docs.DingTalkDocService.sync_dingtalk_docs")
     def test_returns_sync_result_on_success(
         self,
         mock_sync: MagicMock,
-        mock_is_configured: MagicMock,
         dingtalk_client: TestClient,
         test_user: User,
     ) -> None:
@@ -216,29 +213,20 @@ class TestSyncDingtalkDocs:
         assert data["total"] == 7
 
     @patch(
-        "app.api.endpoints.dingtalk_docs.DingTalkDocService.is_configured",
-        return_value=True,
-    )
-    @patch(
         "app.api.endpoints.dingtalk_docs.DingTalkDocService.sync_dingtalk_docs",
-        side_effect=ValueError("MCP URL is not configured"),
+        side_effect=ValueError("DingTalk is not authorized"),
     )
     def test_returns_400_on_value_error(
         self,
         mock_sync: MagicMock,
-        mock_is_configured: MagicMock,
         dingtalk_client: TestClient,
     ) -> None:
         """Returns 400 when sync raises ValueError."""
         response = dingtalk_client.post("/dingtalk-docs/sync")
 
         assert response.status_code == 400
-        assert "MCP URL is not configured" in response.json()["detail"]
+        assert "DingTalk is not authorized" in response.json()["detail"]
 
-    @patch(
-        "app.api.endpoints.dingtalk_docs.DingTalkDocService.is_configured",
-        return_value=True,
-    )
     @patch(
         "app.api.endpoints.dingtalk_docs.DingTalkDocService.sync_dingtalk_docs",
         side_effect=Exception("Connection failed"),
@@ -246,7 +234,6 @@ class TestSyncDingtalkDocs:
     def test_returns_500_on_unexpected_error(
         self,
         mock_sync: MagicMock,
-        mock_is_configured: MagicMock,
         dingtalk_client: TestClient,
     ) -> None:
         """Returns 500 when sync raises an unexpected exception."""

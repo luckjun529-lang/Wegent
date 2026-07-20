@@ -138,6 +138,11 @@ export interface PublicContextData {
   file_extension?: string
   file_size?: number
   mime_type?: string
+  source?: string | null
+  dingtalk_node_id?: string | null
+  doc_url?: string | null
+  dingtalk_source?: string | null
+  read_at?: string | null
   // Knowledge base fields
   document_count?: number
   // External knowledge fields

@@ -22,6 +22,7 @@ import MobileBranchSelector from '../selector/MobileBranchSelector'
 import MobileClarificationToggle from '../clarification/MobileClarificationToggle'
 import MobileCorrectionModeToggle from '../MobileCorrectionModeToggle'
 import ChatContextInput from '../chat/ChatContextInput'
+import DingTalkDocButton from '../chat/DingTalkDocButton'
 import AttachmentButton from '../AttachmentButton'
 import SendButton from './SendButton'
 import LoadingDots from '../message/LoadingDots'
@@ -401,12 +402,19 @@ export function MobileChatInputControls({
                   />
                 )}
                 {showChatContexts && (
-                  <ChatContextInput
-                    selectedContexts={selectedContexts}
-                    onContextsChange={setSelectedContexts}
-                    excludeKnowledgeBaseId={knowledgeBaseId}
-                    triggerVariant="menu-item"
-                  />
+                  <>
+                    <ChatContextInput
+                      selectedContexts={selectedContexts}
+                      onContextsChange={setSelectedContexts}
+                      excludeKnowledgeBaseId={knowledgeBaseId}
+                      triggerVariant="menu-item"
+                    />
+                    <DingTalkDocButton
+                      selectedContexts={selectedContexts}
+                      onContextsChange={setSelectedContexts}
+                      triggerVariant="menu-item"
+                    />
+                  </>
                 )}
                 {showSkillAction && onToggleSkill && (
                   <SkillSelectorPopover

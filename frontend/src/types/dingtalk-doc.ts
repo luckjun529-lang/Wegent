@@ -35,6 +35,8 @@ export interface DingtalkSyncStatus {
   last_synced_at: string | null
   total_nodes: number
   is_configured: boolean
+  is_authenticated?: boolean | null
+  auth_status?: string | null
 }
 
 export interface DingtalkSyncResult {
@@ -43,4 +45,24 @@ export interface DingtalkSyncResult {
   deleted: number
   total: number
   sync_time: string
+}
+
+export type DingtalkDwsAuthStatus =
+  | 'authenticated'
+  | 'unauthenticated'
+  | 'pending'
+  | 'error'
+  | 'timeout'
+  | 'cancelled'
+
+export interface DingtalkDwsAuthStatusResponse {
+  is_authenticated: boolean
+  auth_status: DingtalkDwsAuthStatus
+  error?: string | null
+}
+
+export interface DingtalkDwsDeviceLoginResponse extends DingtalkDwsAuthStatusResponse {
+  verification_url?: string | null
+  user_code?: string | null
+  session_id?: string | null
 }

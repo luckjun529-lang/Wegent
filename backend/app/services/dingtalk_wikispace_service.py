@@ -4,21 +4,8 @@
 
 """DingTalk knowledge base (wikispace) sync service.
 
-Syncs DingTalk wikispace nodes from the user's wikispace MCP server into the
+Syncs DingTalk organization knowledge bases through the backend DWS CLI into the
 local database with source='wikispace'.
-
-The DingTalk wikispace MCP (mcpId=9730) uses DIFFERENT tool names from the docs MCP:
-  - list_wikiSpaces  → list accessible knowledge bases
-  - get_wikiSpace    → get a single KB's metadata
-  - search_wikiSpaces → search KBs by keyword
-
-To list DOCUMENTS within a knowledge base we use the docs MCP tool:
-  - list_nodes(workspaceId=<kb_id>) → list files/folders inside a KB
-
-This service therefore performs a two-phase sync:
-  Phase 1: wikispace MCP  → list_wikiSpaces  → KB list
-  Phase 2: docs MCP       → list_nodes(workspaceId=) → documents in each KB
-            (falls back to wikispace MCP URL if docs MCP is not configured)
 """
 
 from __future__ import annotations
@@ -34,10 +21,9 @@ from app.models.dingtalk_doc import DingTalkNodeSource, DingtalkSyncedNode
 from app.models.user import User
 from app.services.dingtalk_doc_service import (
     MAX_NODES_PER_SYNC,
-    MCP_TOOL_LIST_NODES,
     DingTalkDocService,
 )
-from app.services.user_mcp_service import UserMCPService
+from app.services.dingtalk_dws_service import dingtalk_dws_service
 from shared.telemetry.decorators import (
     add_span_event,
     trace_async,
@@ -48,9 +34,6 @@ logger = logging.getLogger(__name__)
 
 # Source identifier for wikispace nodes
 WIKISPACE_SOURCE = DingTalkNodeSource.WIKISPACE
-
-# Tool name on the knowledge base MCP for listing knowledge bases
-MCP_TOOL_LIST_WIKI_SPACES = "list_wikiSpaces"
 
 # wiki space type value for org-level KBs (as opposed to "myWikiSpace")
 WIKI_SPACE_TYPE_ORG = "orgWikiSpace"
@@ -96,48 +79,28 @@ class DingTalkWikiSpaceService:
     @staticmethod
     @trace_sync()
     def get_user_wikispace_mcp_url(user: User) -> str | None:
-        """Read and decrypt the user's DingTalk WikiSpace MCP URL from preferences."""
-        config = UserMCPService.get_provider_service_config(
-            user.preferences,
-            provider_id="dingtalk",
-            service_id="wikispace",
-        )
-        if not config.get("enabled"):
-            return None
-        url = (config.get("url") or "").strip()
-        return url if url else None
+        """Legacy MCP URL accessor kept for compatibility with old callers."""
+        return None
 
     @staticmethod
     @trace_sync()
     def is_configured(user: User) -> bool:
-        """Check if the user has DingTalk WikiSpace MCP configured and enabled."""
-        return DingTalkWikiSpaceService.get_user_wikispace_mcp_url(user) is not None
+        """DWS is backend-managed; authorization is checked by DWS auth status."""
+        return True
 
     @staticmethod
     @trace_async()
     async def sync_wikispace_nodes(user: User, db: Session) -> dict[str, Any]:
-        """Sync DingTalk wikispace nodes from the user's wikispace MCP server.
-
-        Uses a two-phase approach:
-          1. wikispace MCP  → list_wikiSpaces → knowledge base IDs
-          2. docs MCP       → list_nodes(workspaceId=) → documents in each KB
+        """Sync DingTalk wikispace nodes from DWS.
 
         Returns a dict with sync statistics: added, updated, deleted, total,
         mcp_nodes_fetched.
         """
-        wikispace_mcp_url = DingTalkWikiSpaceService.get_user_wikispace_mcp_url(user)
-        if not wikispace_mcp_url:
-            raise ValueError(
-                "DingTalk WikiSpace MCP URL is not configured or not enabled"
-            )
+        auth_status = await dingtalk_dws_service.auth_status(user.id)
+        if not auth_status.get("is_authenticated"):
+            raise ValueError("DingTalk is not authorized or authorization has expired")
 
-        # Docs MCP URL is optional; falls back to wikispace MCP URL if absent.
-        docs_mcp_url = DingTalkDocService.get_user_dingtalk_mcp_url(user)
-
-        all_nodes = await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(
-            wikispace_mcp_url=wikispace_mcp_url,
-            docs_mcp_url=docs_mcp_url,
-        )
+        all_nodes = await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(user.id)
         original_count = len(all_nodes)
 
         if len(all_nodes) > MAX_NODES_PER_SYNC:
@@ -154,315 +117,130 @@ class DingTalkWikiSpaceService:
             user.id, all_nodes, now, db, source=WIKISPACE_SOURCE
         )
         stats["mcp_nodes_fetched"] = original_count
-        sanitized_wikispace_mcp_url = _sanitize_url_for_telemetry(wikispace_mcp_url)
         add_span_event(
             "dingtalk.wikispace.sync.completed",
             {
-                "wikispace_mcp_url": sanitized_wikispace_mcp_url,
                 "mcp_nodes_fetched": stats["mcp_nodes_fetched"],
             },
         )
         return stats
 
     # ------------------------------------------------------------------
-    # Phase 1 helpers: list knowledge bases via wikispace MCP
+    # Phase 1 helpers: list knowledge bases via DWS
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def _list_wiki_spaces(wikispace_mcp_url: str) -> list[dict[str, Any]]:
-        """Call list_wikiSpaces on the wikispace MCP and return all KB entries.
-
-        Paginates automatically. Logs available tools and raw responses to aid
-        debugging in case the MCP server returns unexpected data.
-        """
-        try:
-            from mcp import ClientSession
-            from mcp.client.streamable_http import streamablehttp_client
-        except ImportError:
-            logger.error("mcp package not available for DingTalk wikispace sync")
-            raise
-
-        kb_nodes: list[dict[str, Any]] = []
-
-        async with streamablehttp_client(url=wikispace_mcp_url) as (
-            read_stream,
-            write_stream,
-            _,
-        ):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-
-                # Log all available tools so we know what this server exposes.
-                try:
-                    tools_result = await session.list_tools()
-                    tool_names: list[str] = []
-                    if hasattr(tools_result, "tools"):
-                        tool_names = [
-                            t.name for t in tools_result.tools if hasattr(t, "name")
-                        ]
-                    elif isinstance(tools_result, list):
-                        tool_names = [
-                            t.get("name", "")
-                            for t in tools_result
-                            if isinstance(t, dict)
-                        ]
-                    logger.info(
-                        "DingTalk wikispace MCP exposes %d tools: %s",
-                        len(tool_names),
-                        tool_names,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Could not list wikispace MCP tools: %s",
-                        exc,
-                    )
-
-                # Paginate through all org-level knowledge bases.
-                page_token: str | None = None
-                first_call = True
-                while True:
-                    args: dict[str, Any] = {
-                        "wikiSpaceType": WIKI_SPACE_TYPE_ORG,
-                        "pageSize": 50,
-                    }
-                    if page_token:
-                        args["pageToken"] = page_token
-
-                    result = await session.call_tool(MCP_TOOL_LIST_WIKI_SPACES, args)
-
-                    # Log raw response on the first call to enable offline diagnosis.
-                    if first_call:
-                        first_call = False
-                        try:
-                            raw_repr = repr(result)
-                            logger.info(
-                                "list_wikiSpaces raw response "
-                                "(first 2000 chars): %.2000s",
-                                raw_repr,
-                            )
-                        except Exception:
-                            pass
-
-                    batch, page_token = DingTalkDocService._parse_list_nodes_result(
-                        result
-                    )
-                    kb_nodes.extend(batch)
-                    if not page_token:
-                        break
-
+    async def _list_wiki_spaces(user_id: int) -> list[dict[str, Any]]:
+        """List all organization knowledge bases via DWS."""
+        kb_nodes = await dingtalk_dws_service.list_spaces(user_id, WIKI_SPACE_TYPE_ORG)
         logger.info(
-            "list_wikiSpaces returned %d knowledge bases",
+            "DWS wiki space list returned %d knowledge bases",
             len(kb_nodes),
         )
         return kb_nodes
 
     # ------------------------------------------------------------------
-    # Phase 2 helpers: list documents inside each KB via docs MCP
+    # Phase 2 helpers: list documents inside each KB via DWS
     # ------------------------------------------------------------------
 
     @staticmethod
     async def _list_nodes_in_wikispace(
-        session: Any,
+        user_id: int,
         workspace_id: str,
         all_nodes: list[dict[str, Any]],
     ) -> None:
-        """List all nodes in the given KB using an existing MCP session.
-
-        Uses list_nodes(workspaceId=wikispace_id) which is the correct way to
-        enumerate documents inside a knowledge base.
-
-        Args:
-            session: An initialized MCP ClientSession to reuse.
-            workspace_id: The knowledge base ID to list nodes from.
-            all_nodes: List to append fetched nodes to.
-        """
-        # Log the first response for this KB for debugging.
-        first_args: dict[str, Any] = {
-            "workspaceId": workspace_id,
-            "pageSize": 50,
-        }
-        first_result = await session.call_tool(MCP_TOOL_LIST_NODES, first_args)
-        try:
-            logger.info(
-                "list_nodes(workspaceId=%s) first response (first 1000 chars): %.1000s",
-                workspace_id,
-                repr(first_result),
+        """List all nodes in the given KB workspace."""
+        cursor: str | None = None
+        while True:
+            batch, cursor = await dingtalk_dws_service.list_nodes(
+                user_id,
+                workspace_id=workspace_id,
+                cursor=cursor,
             )
-        except Exception:
-            pass
 
-        first_batch, first_token = DingTalkDocService._parse_list_nodes_result(
-            first_result
-        )
+            for node in batch:
+                if not node.get("parentId"):
+                    node["parentId"] = workspace_id
+                if not node.get("workspaceId"):
+                    node["workspaceId"] = workspace_id
 
-        # Set parentId for root-level nodes to the knowledge base's nodeId.
-        # This ensures the directory tree correctly shows these nodes under
-        # the KB folder (which has nodeId = workspace_id).
-        for node in first_batch:
-            if not node.get("parentId"):
-                node["parentId"] = workspace_id
+            all_nodes.extend(batch)
 
-        all_nodes.extend(first_batch)
-
-        # Recurse into sub-folders found in the first batch.
-        for node in first_batch:
-            if node.get("nodeType") == "folder":
-                ws_id = node.get("workspaceId") or workspace_id
-                node_id = node.get("nodeId")
+            for node in batch:
+                if DingTalkDocService._extract_node_type(node) != "folder":
+                    continue
+                node_id = DingTalkDocService._extract_node_id(node)
                 if not node_id:
                     continue
                 await DingTalkDocService._list_nodes_recursive(
-                    session,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
                     folder_id=node_id,
-                    workspace_id=ws_id,
                     all_nodes=all_nodes,
                     depth=1,
                 )
 
-        # Continue paging the root level if there are more pages.
-        page_token = first_token
-        while page_token:
-            args: dict[str, Any] = {
-                "workspaceId": workspace_id,
-                "pageSize": 50,
-                "pageToken": page_token,
-            }
-            result = await session.call_tool(MCP_TOOL_LIST_NODES, args)
-            batch, page_token = DingTalkDocService._parse_list_nodes_result(result)
-
-            # Set parentId for root-level nodes to the knowledge base's nodeId.
-            for node in batch:
-                if not node.get("parentId"):
-                    node["parentId"] = workspace_id
-
-            all_nodes.extend(batch)
-            for node in batch:
-                if node.get("nodeType") == "folder":
-                    ws_id = node.get("workspaceId") or workspace_id
-                    node_id = node.get("nodeId")
-                    if not node_id:
-                        continue
-                    await DingTalkDocService._list_nodes_recursive(
-                        session,
-                        folder_id=node_id,
-                        workspace_id=ws_id,
-                        all_nodes=all_nodes,
-                        depth=1,
-                    )
+            if not cursor:
+                break
 
     @staticmethod
-    async def _fetch_all_wikispace_nodes(
-        wikispace_mcp_url: str,
-        docs_mcp_url: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Two-phase fetch of all documents across all accessible knowledge bases.
-
-        Phase 1 - wikispace MCP (list_wikiSpaces):
-            Connects to the knowledge base MCP server and calls list_wikiSpaces to get
-            the list of knowledge bases the user can access.
-
-        Phase 2 - docs MCP (list_nodes with workspaceId):
-            For each KB found in Phase 1, connects to the docs MCP server and
-            calls list_nodes(workspaceId=<kb_id>) to enumerate all documents
-            and folders.  If the docs MCP URL is not configured the wikispace
-            MCP URL is used as a fallback (works if it's a combined server).
-
-            A single MCP client session is created before the Phase 2 loop and
-            reused for all KBs to avoid per-KB session overhead.
-        """
-        try:
-            from mcp import ClientSession
-            from mcp.client.streamable_http import streamablehttp_client
-        except ImportError:
-            logger.error("mcp package not available for DingTalk wikispace sync")
-            raise
-
+    async def _fetch_all_wikispace_nodes(user_id: int) -> list[dict[str, Any]]:
+        """Fetch all documents across all accessible organization knowledge bases."""
         all_nodes: list[dict[str, Any]] = []
-
-        # Phase 1: obtain knowledge-base list.
-        kb_nodes = await DingTalkWikiSpaceService._list_wiki_spaces(wikispace_mcp_url)
+        kb_nodes = await DingTalkWikiSpaceService._list_wiki_spaces(user_id)
 
         if not kb_nodes:
             logger.warning(
-                "list_wikiSpaces returned 0 knowledge bases. "
-                "Verify the wikispace MCP URL and user permissions."
+                "DWS wiki space list returned 0 knowledge bases. "
+                "Verify DingTalk permissions."
             )
             return all_nodes
 
-        # The URL used for list_nodes (Phase 2).
-        nodes_url = docs_mcp_url or wikispace_mcp_url
-        if not docs_mcp_url:
-            logger.info(
-                "Docs MCP not configured — using wikispace MCP URL for list_nodes. "
-                "Configure the DingTalk Docs MCP for best results."
+        for kb_node in kb_nodes:
+            kb_id = DingTalkDocService._extract_workspace_id(
+                kb_node
+            ) or DingTalkDocService._extract_node_id(kb_node)
+            if not kb_id:
+                logger.warning("Skipping KB node with no workspace id")
+                continue
+
+            kb_name = kb_node.get("name") or kb_node.get("title") or kb_id
+            kb_url = kb_node.get("url") or (
+                f"https://alidocs.dingtalk.com/i/spaces/{kb_id}/overview"
             )
 
-        # Phase 2: create a single docs MCP session and reuse for all KBs.
-        async with streamablehttp_client(url=nodes_url) as (
-            read_stream,
-            write_stream,
-            _,
-        ):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-
-                # List documents for every knowledge base using the same session.
-                for kb_node in kb_nodes:
-                    # The wikispace MCP returns workspaceId as the KB identifier.
-                    kb_id = (
-                        kb_node.get("workspaceId")
-                        or kb_node.get("nodeId")
-                        or kb_node.get("id")
-                    )
-                    if not kb_id:
-                        logger.warning(
-                            "Skipping KB node with no workspaceId/nodeId: %s",
-                            kb_node,
-                        )
-                        continue
-
-                    kb_name = kb_node.get("name") or kb_node.get("title") or kb_id
-                    kb_url = kb_node.get("url") or (
-                        f"https://alidocs.dingtalk.com/i/spaces/{kb_id}/overview"
-                    )
-
-                    # Represent the KB root as a folder-like node so the UI can render
-                    # it as the top of the document tree.
-                    kb_as_folder: dict[str, Any] = {
-                        **kb_node,
-                        "nodeId": kb_id,
-                        "nodeType": "folder",
-                        "workspaceId": kb_id,
-                        "name": kb_name,
-                        "url": kb_url,
-                    }
-                    logger.info(
-                        "Fetching documents for knowledge base '%s' (workspace_id=%s)",
-                        kb_name,
-                        kb_id,
-                    )
-
-                    try:
-                        await DingTalkWikiSpaceService._list_nodes_in_wikispace(
-                            session=session,
-                            workspace_id=kb_id,
-                            all_nodes=all_nodes,
-                        )
-                        # Only add the KB root folder AFTER successfully listing contents.
-                        all_nodes.append(kb_as_folder)
-                    except Exception as exc:
-                        logger.error(
-                            "Failed to list nodes in KB '%s' (id=%s): %s",
-                            kb_name,
-                            kb_id,
-                            exc,
-                        )
-                        # Continue with remaining KBs even if one fails.
+            kb_as_folder: dict[str, Any] = {
+                **kb_node,
+                "nodeId": kb_id,
+                "nodeType": "folder",
+                "workspaceId": kb_id,
+                "name": kb_name,
+                "url": kb_url,
+            }
+            logger.info(
+                "Fetching DingTalk KB '%s' (workspace_id=%s)",
+                kb_name,
+                kb_id,
+            )
+            try:
+                await DingTalkWikiSpaceService._list_nodes_in_wikispace(
+                    user_id=user_id,
+                    workspace_id=kb_id,
+                    all_nodes=all_nodes,
+                )
+                all_nodes.append(kb_as_folder)
+            except Exception as exc:
+                logger.error(
+                    "Failed to list nodes in KB '%s' (id=%s): %s",
+                    kb_name,
+                    kb_id,
+                    exc,
+                )
 
         unique_nodes = DingTalkWikiSpaceService._dedupe_nodes_by_id(all_nodes)
 
         logger.info(
-            "WikiSpace sync fetched %d total nodes across %d knowledge bases",
+            "DWS WikiSpace sync fetched %d total nodes across %d knowledge bases",
             len(unique_nodes),
             len(kb_nodes),
         )

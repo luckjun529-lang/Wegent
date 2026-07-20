@@ -4,8 +4,8 @@
 
 """DingTalk document sync service.
 
-Syncs DingTalk document nodes from the user's MCP server into the local database.
-Uses the MCP client protocol to connect to the user's DingTalk Docs MCP server URL.
+Syncs DingTalk document nodes through the backend DWS CLI into the local database.
+The DWS login state is isolated per Wegent user by DingTalkDwsService.
 """
 
 from __future__ import annotations
@@ -18,11 +18,11 @@ from sqlalchemy.orm import Session
 
 from app.models.dingtalk_doc import DingTalkNodeSource, DingtalkSyncedNode
 from app.models.user import User
-from app.services.user_mcp_service import UserMCPService
+from app.services.dingtalk_dws_service import dingtalk_dws_service
 
 logger = logging.getLogger(__name__)
 
-# MCP tool names for DingTalk Docs
+# Legacy MCP tool names kept for older tests/imports. DWS is the active sync path.
 MCP_TOOL_LIST_NODES = "list_nodes"
 MCP_TOOL_SEARCH_DOCUMENTS = "search_documents"
 
@@ -40,40 +40,26 @@ class DingTalkDocService:
 
     @staticmethod
     def get_user_dingtalk_mcp_url(user: User) -> str | None:
-        """Read and decrypt the user's DingTalk Docs MCP URL from preferences.
-
-        Returns the decrypted URL if configured and enabled, None otherwise.
-        """
-        config = UserMCPService.get_provider_service_config(
-            user.preferences,
-            provider_id="dingtalk",
-            service_id="docs",
-        )
-        if not config.get("enabled"):
-            return None
-        url = (config.get("url") or "").strip()
-        return url if url else None
+        """Legacy MCP URL accessor kept for compatibility with old callers."""
+        return None
 
     @staticmethod
     def is_configured(user: User) -> bool:
-        """Check if the user has DingTalk Docs MCP configured and enabled."""
-        return DingTalkDocService.get_user_dingtalk_mcp_url(user) is not None
+        """DWS is backend-managed; authorization is checked by DWS auth status."""
+        return True
 
     @staticmethod
     async def sync_dingtalk_docs(user: User, db: Session) -> dict[str, Any]:
-        """Sync DingTalk document nodes from the user's MCP server.
-
-        Connects to the user's DingTalk Docs MCP server, recursively lists all
-        document nodes, and updates the local database.
+        """Sync DingTalk document nodes from DWS.
 
         Returns a dict with sync statistics: added, updated, deleted, total.
         """
-        mcp_url = DingTalkDocService.get_user_dingtalk_mcp_url(user)
-        if not mcp_url:
-            raise ValueError("DingTalk Docs MCP URL is not configured or not enabled")
+        auth_status = await dingtalk_dws_service.auth_status(user.id)
+        if not auth_status.get("is_authenticated"):
+            raise ValueError("DingTalk is not authorized or authorization has expired")
 
-        # Fetch all nodes from MCP server
-        all_nodes = await DingTalkDocService._fetch_all_nodes(mcp_url)
+        all_nodes = await DingTalkDocService._fetch_all_nodes(user.id)
+        original_count = len(all_nodes)
 
         if len(all_nodes) > MAX_NODES_PER_SYNC:
             logger.warning(
@@ -89,62 +75,38 @@ class DingTalkDocService:
         stats = DingTalkDocService._sync_nodes_to_db(
             user.id, all_nodes, now, db, source=DOCS_SOURCE
         )
-        stats["mcp_nodes_fetched"] = len(all_nodes)
+        stats["mcp_nodes_fetched"] = original_count
 
         return stats
 
     @staticmethod
-    async def _fetch_all_nodes(mcp_url: str) -> list[dict[str, Any]]:
-        """Fetch all document nodes from the DingTalk MCP server.
-
-        Uses the MCP client protocol to connect and call list_nodes recursively.
-        """
-        try:
-            from mcp import ClientSession
-            from mcp.client.streamable_http import streamablehttp_client
-        except ImportError:
-            logger.error("mcp package not available for DingTalk doc sync")
-            raise
-
+    async def _fetch_all_nodes(user_id: int) -> list[dict[str, Any]]:
+        """Fetch all personal-document nodes from DWS myWikiSpace."""
         all_nodes: list[dict[str, Any]] = []
-
-        async with streamablehttp_client(url=mcp_url) as (
-            read_stream,
-            write_stream,
-            _,
-        ):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-
-                # Start from root (no folderId, no workspaceId)
-                await DingTalkDocService._list_nodes_recursive(
-                    session,
-                    folder_id=None,
-                    workspace_id=None,
-                    all_nodes=all_nodes,
-                    depth=0,
-                )
-
+        spaces = await dingtalk_dws_service.list_spaces(user_id, "myWikiSpace")
+        for space in spaces:
+            workspace_id = DingTalkDocService._extract_workspace_id(space)
+            if not workspace_id:
+                logger.warning("Skipping DingTalk personal space without workspace id")
+                continue
+            await DingTalkDocService._list_nodes_recursive(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                folder_id=None,
+                all_nodes=all_nodes,
+                depth=0,
+            )
         return all_nodes
 
     @staticmethod
     async def _list_nodes_recursive(
-        session: Any,
+        user_id: int,
+        workspace_id: str,
         folder_id: str | None,
-        workspace_id: str | None,
         all_nodes: list[dict[str, Any]],
         depth: int,
     ) -> None:
-        """Recursively list nodes from the MCP server.
-
-        Traverses folders by calling list_nodes for each folder found.
-
-        The DingTalk MCP list_nodes tool does NOT return parent node information
-        in the node data. Instead, the parent relationship is implicit: when we
-        call list_nodes(folderId=X), all returned nodes are children of X.
-        We therefore inject the parentId manually into each returned node so
-        that _sync_nodes_to_db can persist the correct parent_node_id.
-        """
+        """Recursively list DWS wiki nodes under a workspace/folder."""
         if depth >= MAX_RECURSION_DEPTH:
             logger.warning(
                 "Max recursion depth %d reached at folder %s",
@@ -153,56 +115,66 @@ class DingTalkDocService:
             )
             return
 
-        page_token = None
+        cursor = None
         while True:
-            # Build arguments for list_nodes tool
-            args: dict[str, Any] = {"pageSize": 50}
-            if folder_id:
-                args["folderId"] = folder_id
-            if workspace_id:
-                args["workspaceId"] = workspace_id
-            if page_token:
-                args["pageToken"] = page_token
-
-            result = await session.call_tool(MCP_TOOL_LIST_NODES, args)
-
-            # Parse the result - MCP returns content items
-            nodes_data, parsed_page_token = DingTalkDocService._parse_list_nodes_result(
-                result
+            nodes_data, cursor = await dingtalk_dws_service.list_nodes(
+                user_id,
+                workspace_id=workspace_id,
+                folder_id=folder_id,
+                cursor=cursor,
             )
 
-            # Inject parentId into each node: the MCP API does not return parent
-            # information, but we know the parent because we called list_nodes
-            # with folderId=folder_id. Root-level nodes have folder_id=None.
             for node in nodes_data:
                 if folder_id and not node.get("parentId"):
                     node["parentId"] = folder_id
+                if workspace_id and not node.get("workspaceId"):
+                    node["workspaceId"] = workspace_id
 
             all_nodes.extend(nodes_data)
 
-            # Recursively traverse all folders regardless of hasChildren flag,
-            # because the DingTalk MCP API may not reliably set hasChildren=True
-            # even when a folder contains children.
             for node in nodes_data:
-                if node.get("nodeType") == "folder":
-                    node_id = node.get("nodeId", "")
-                    ws_id = node.get("workspaceId") or workspace_id
+                if DingTalkDocService._extract_node_type(node) == "folder":
+                    node_id = DingTalkDocService._extract_node_id(node)
+                    if not node_id:
+                        continue
                     await DingTalkDocService._list_nodes_recursive(
-                        session,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
                         folder_id=node_id,
-                        workspace_id=ws_id,
                         all_nodes=all_nodes,
                         depth=depth + 1,
                     )
 
-            # Check for more pages: prefer token from parsed payload, fall back to result.meta
-            page_token = parsed_page_token
-            if not page_token and hasattr(result, "meta") and result.meta:
-                page_token = result.meta.get("nextPageToken")
-            if not page_token:
+            if not cursor:
                 break
 
-    # Known list keys in DingTalk MCP list_nodes/list_wikiSpaces responses.
+    @staticmethod
+    def _extract_workspace_id(data: dict[str, Any]) -> str:
+        return str(
+            data.get("workspaceId")
+            or data.get("workspace_id")
+            or data.get("spaceId")
+            or data.get("space_id")
+            or data.get("id")
+            or ""
+        )
+
+    @staticmethod
+    def _extract_node_id(data: dict[str, Any]) -> str:
+        return str(
+            data.get("nodeId")
+            or data.get("node_id")
+            or data.get("dentryUuid")
+            or data.get("dingtalk_node_id")
+            or data.get("id")
+            or ""
+        )
+
+    @staticmethod
+    def _extract_node_type(data: dict[str, Any]) -> str:
+        return str(data.get("nodeType") or data.get("node_type") or "doc")
+
+    # Known list keys in DingTalk list_nodes/list_wikiSpaces responses.
     # Add new keys only after validating them against real MCP payloads.
     _NODE_LIST_KEYS = (
         "items",
@@ -320,7 +292,7 @@ class DingTalkDocService:
         # Build a map of current DingTalk node IDs
         dingtalk_node_ids = set()
         for node_data in nodes:
-            node_id = node_data.get("nodeId", "")
+            node_id = DingTalkDocService._extract_node_id(node_data)
             if not node_id:
                 continue
             dingtalk_node_ids.add(node_id)
@@ -344,9 +316,9 @@ class DingTalkDocService:
 
         # Collect all non-empty node IDs for a single batch lookup (avoids N+1 queries)
         node_ids = [
-            node_data.get("nodeId", "")
+            DingTalkDocService._extract_node_id(node_data)
             for node_data in nodes
-            if node_data.get("nodeId", "")
+            if DingTalkDocService._extract_node_id(node_data)
         ]
         existing_nodes_map: dict[str, DingtalkSyncedNode] = {}
         if node_ids:
@@ -363,12 +335,12 @@ class DingTalkDocService:
 
         # Upsert nodes from DingTalk
         for node_data in nodes:
-            node_id = node_data.get("nodeId", "")
+            node_id = DingTalkDocService._extract_node_id(node_data)
             if not node_id:
                 continue
 
             name = node_data.get("name", node_data.get("title", "Untitled"))
-            node_type_raw = node_data.get("nodeType", "doc")
+            node_type_raw = DingTalkDocService._extract_node_type(node_data)
 
             # Map node type
             if node_type_raw == "folder":
@@ -379,17 +351,26 @@ class DingTalkDocService:
                 node_type = "doc"
 
             # Build document URL
-            doc_url = node_data.get("url", "")
+            doc_url = node_data.get("url") or node_data.get("docUrl") or ""
             if not doc_url:
                 doc_url = f"https://alidocs.dingtalk.com/i/nodes/{node_id}"
 
             parent_node_id = (
-                node_data.get("parentId") or node_data.get("parentDentryUuid") or ""
+                node_data.get("parentId")
+                or node_data.get("parent_id")
+                or node_data.get("parentNodeId")
+                or node_data.get("parentDentryUuid")
+                or ""
             )
-            workspace_id = node_data.get("workspaceId") or ""
-            content_type = node_data.get("contentType") or ""
+            workspace_id = (
+                node_data.get("workspaceId") or node_data.get("workspace_id") or ""
+            )
+            content_type = (
+                node_data.get("contentType") or node_data.get("content_type") or ""
+            )
             content_updated_at = DingTalkDocService._parse_update_time(
-                node_data.get("updateTime"), sync_time
+                node_data.get("updateTime") or node_data.get("updated_at"),
+                sync_time,
             )
 
             # Look up existing node from pre-fetched map (avoids per-node DB query)
@@ -481,7 +462,7 @@ class DingTalkDocService:
     def _parse_update_time(update_time: Any, fallback: datetime) -> datetime:
         """Parse updateTime from list_nodes response into a datetime (local time).
 
-        The DingTalk MCP API may return updateTime as a Unix timestamp (int/float,
+        DingTalk may return updateTime as a Unix timestamp (int/float,
         in seconds or milliseconds) or as an ISO 8601 string. The result is
         converted to local time (no tzinfo) to be consistent with created_at.
         Falls back to the provided fallback datetime if parsing fails or absent.

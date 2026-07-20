@@ -49,18 +49,7 @@ async def sync_dingtalk_docs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DingtalkSyncResult:
-    """Trigger sync of DingTalk documents from the user's MCP server.
-
-    Requires the user to have DingTalk Docs MCP URL configured and enabled
-    in their integration settings.
-    """
-    if not DingTalkDocService.is_configured(current_user):
-        raise HTTPException(
-            status_code=400,
-            detail="DingTalk Docs MCP is not configured. "
-            "Please enable it in Settings > Integrations first.",
-        )
-
+    """Trigger sync of DingTalk documents from DWS."""
     try:
         result = await DingTalkDocService.sync_dingtalk_docs(current_user, db)
         return DingtalkSyncResult(**result)

@@ -5,7 +5,7 @@
 'use client'
 
 import React, { ReactNode } from 'react'
-import { Database, Table2 } from 'lucide-react'
+import { Database, ExternalLink, FileText, Table2 } from 'lucide-react'
 import AttachmentPreview from '../input/AttachmentPreview'
 import type { SubtaskContextBrief, Attachment } from '@/types/api'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -96,6 +96,10 @@ function ContextBadgeItem({
   onReselect?: (context: SubtaskContextBrief) => void
   shareToken?: string
 }) {
+  if (isDingTalkDocAttachment(context)) {
+    return <DingTalkDocBadge context={context} />
+  }
+
   switch (context.context_type) {
     case 'attachment':
       return <AttachmentContextBadge context={context} shareToken={shareToken} />
@@ -108,6 +112,10 @@ function ContextBadgeItem({
     default:
       return null
   }
+}
+
+function isDingTalkDocAttachment(context: SubtaskContextBrief): boolean {
+  return context.context_type === 'attachment' && context.source === 'dingtalk_doc'
 }
 
 /**
@@ -209,6 +217,59 @@ function ExternalKnowledgeBadge({ context }: { context: SubtaskContextBrief }) {
         title={context.name}
         subtitle={subtitle}
       />
+    </div>
+  )
+}
+
+function DingTalkDocBadge({ context }: { context: SubtaskContextBrief }) {
+  const { t } = useTranslation('chat')
+  const sourceLabel =
+    context.dingtalk_source === 'wikispace'
+      ? t('dingtalkDocs.wikispaceTab')
+      : t('dingtalkDocs.myDocsTab')
+  const subtitle = `${t('dingtalkDocs.docBadgeHint')} · ${sourceLabel}`
+  const isClickable = !!context.doc_url
+
+  const openDoc = () => {
+    if (!context.doc_url) {
+      return
+    }
+    window.open(context.doc_url, '_blank', 'noopener,noreferrer')
+  }
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    openDoc()
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') {
+      return
+    }
+    e.preventDefault()
+    openDoc()
+  }
+
+  return (
+    <div
+      className={`flex items-center gap-3 p-3 rounded-lg border mb-2 max-w-full bg-orange-50/80 border-orange-200 text-orange-950 ${
+        isClickable ? 'cursor-pointer hover:border-orange-400 hover:shadow-sm transition-all' : ''
+      }`}
+      onClick={isClickable ? handleClick : undefined}
+      onKeyDown={isClickable ? handleKeyDown : undefined}
+      role={isClickable ? 'button' : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      title={isClickable ? (context.doc_url ?? undefined) : undefined}
+      data-testid="message-context-dingtalk-doc"
+    >
+      <FileText className="h-5 w-5 flex-shrink-0 text-orange-600" />
+      <div className="flex-1 min-w-0 overflow-hidden">
+        <div className="font-medium text-sm truncate" title={context.name}>
+          {context.name}
+        </div>
+        <div className="text-xs text-orange-700 truncate">{subtitle}</div>
+      </div>
+      {isClickable && <ExternalLink className="h-4 w-4 flex-shrink-0 text-orange-500" />}
     </div>
   )
 }

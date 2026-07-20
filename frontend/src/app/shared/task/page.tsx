@@ -146,6 +146,11 @@ function SharedTaskContent() {
         file_extension: ctx.file_extension,
         file_size: ctx.file_size,
         mime_type: ctx.mime_type,
+        source: ctx.source,
+        dingtalk_node_id: ctx.dingtalk_node_id,
+        doc_url: ctx.doc_url,
+        dingtalk_source: ctx.dingtalk_source,
+        read_at: ctx.read_at,
         // Knowledge base fields
         document_count: ctx.document_count,
         // External knowledge fields

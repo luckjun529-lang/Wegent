@@ -78,6 +78,7 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./logs/backend:/app/logs
+      - backend_data:/app/data
     environment:
       # Logging configuration
       LOG_FILE_ENABLED: ${LOG_FILE_ENABLED:-true}
@@ -355,6 +356,8 @@ services:
       - wegent-network
 
 volumes:
+  backend_data:
+    driver: local
   mysql_data:
     driver: local
   redis_data:

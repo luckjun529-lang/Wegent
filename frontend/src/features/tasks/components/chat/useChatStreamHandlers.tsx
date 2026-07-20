@@ -40,11 +40,33 @@ import type {
   TaskType,
   InteractiveFormAnswerPayload,
 } from '@/types/api'
-import type { ContextItem, ExternalKnowledgeContext } from '@/types/context'
+import type { ContextItem, DingTalkDocContext, ExternalKnowledgeContext } from '@/types/context'
 import type { SkillRef } from '../../hooks/useSkillSelector'
 
 function isVirtualKnowledgeBasePath(path: string): boolean {
   return path.startsWith('/knowledge/') && !path.startsWith('/knowledge/document/')
+}
+
+function getDingTalkMarkdownName(name: string): string {
+  return name.toLowerCase().endsWith('.md') ? name : `${name}.md`
+}
+
+function buildPendingDingTalkContext(
+  context: DingTalkDocContext,
+  index: number
+): SubtaskContextBrief {
+  return {
+    id: -(index + 1),
+    context_type: 'attachment',
+    name: getDingTalkMarkdownName(context.name),
+    status: 'ready',
+    file_extension: '.md',
+    mime_type: 'text/markdown',
+    source: 'dingtalk_doc',
+    dingtalk_node_id: context.dingtalk_node_id,
+    doc_url: context.doc_url,
+    dingtalk_source: context.source,
+  }
 }
 
 export interface UseChatStreamHandlersOptions {
@@ -445,15 +467,15 @@ export function useChatStreamHandlers({
       }
 
       const contextItems: Array<{
-        type: 'knowledge_base' | 'table' | 'selected_documents' | 'external_knowledge'
+        type:
+          | 'knowledge_base'
+          | 'table'
+          | 'selected_documents'
+          | 'external_knowledge'
+          | 'dingtalk_doc'
         data: Record<string, unknown>
       }> = snapshotContexts
-        .filter(
-          ctx =>
-            ctx.type !== 'queue_message' &&
-            ctx.type !== 'dingtalk_doc' &&
-            ctx.type !== 'external_knowledge'
-        )
+        .filter(ctx => ctx.type !== 'queue_message' && ctx.type !== 'external_knowledge')
         .map(ctx => {
           if (ctx.type === 'knowledge_base') {
             return {
@@ -467,6 +489,19 @@ export function useChatStreamHandlers({
                 folder_names: ctx.folder_names,
                 include_subfolders: ctx.include_subfolders,
                 scope_restricted: ctx.scope_restricted,
+              },
+            }
+          }
+          if (ctx.type === 'dingtalk_doc') {
+            const dingtalkContext = ctx as import('@/types/context').DingTalkDocContext
+            return {
+              type: 'dingtalk_doc' as const,
+              data: {
+                source: dingtalkContext.source,
+                dingtalk_node_id: dingtalkContext.dingtalk_node_id,
+                doc_url: dingtalkContext.doc_url,
+                name: dingtalkContext.name,
+                node_type: dingtalkContext.node_type,
               },
             }
           }
@@ -510,18 +545,6 @@ export function useChatStreamHandlers({
         messageWithQueueContent = `${queueContents}\n\n---\n\n${finalMessage}`
       }
 
-      const dingtalkDocContexts = snapshotContexts.filter(ctx => ctx.type === 'dingtalk_doc')
-      if (dingtalkDocContexts.length > 0) {
-        const docRefs = dingtalkDocContexts
-          .map(ctx => {
-            const docCtx = ctx as import('@/types/context').DingTalkDocContext
-            return `- [${docCtx.name}](${docCtx.doc_url})`
-          })
-          .join('\n')
-        const dingtalkPrefix = `**${t('chat:dingtalkDocs.referencedDocsLabel')}**\n${docRefs}\n\n---\n\n`
-        messageWithQueueContent = `${dingtalkPrefix}${messageWithQueueContent}`
-      }
-
       const queueAttachmentIds = queueMessageContexts.flatMap(
         ctx => (ctx as import('@/types/context').QueueMessageContext).attachmentContextIds ?? []
       )
@@ -545,38 +568,7 @@ export function useChatStreamHandlers({
         })
       }
 
-      const pendingContexts: Array<{
-        id: number
-        context_type: 'attachment' | 'knowledge_base' | 'table' | 'external_knowledge'
-        name: string
-        status: 'pending' | 'ready'
-        file_extension?: string
-        file_size?: number
-        mime_type?: string
-        document_count?: number
-        document_ids?: number[]
-        folder_ids?: number[]
-        folder_names?: string[]
-        include_subfolders?: boolean
-        scope_restricted?: boolean
-        knowledge_id?: number
-        document_id?: number
-        source_config?: {
-          url?: string
-        }
-        external_provider?: string
-        external_mode?: string
-        external_id?: string
-        external_scope?: string
-        external_target_type?: string
-        external_node_id?: string
-        external_document_id?: string
-        external_parent_id?: string
-        video_count?: number
-        site?: string | null
-        source_url?: string
-        cover_url?: string | null
-      }> = []
+      const pendingContexts: SubtaskContextBrief[] = []
 
       for (const attachment of snapshotAttachments) {
         pendingContexts.push({
@@ -654,6 +646,10 @@ export function useChatStreamHandlers({
             external_document_id: externalContext.ref.document_id,
             external_parent_id: externalContext.ref.parent_id,
           })
+        } else if (ctx.type === 'dingtalk_doc') {
+          pendingContexts.push(
+            buildPendingDingTalkContext(ctx as DingTalkDocContext, pendingContexts.length)
+          )
         }
       }
 
@@ -1356,38 +1352,7 @@ export function useChatStreamHandlers({
         }
 
         // Build pending contexts for immediate display from existing contexts
-        const pendingContexts: Array<{
-          id: number
-          context_type: 'attachment' | 'knowledge_base' | 'table' | 'external_knowledge'
-          name: string
-          status: 'pending' | 'ready'
-          file_extension?: string
-          file_size?: number
-          mime_type?: string
-          document_count?: number
-          document_ids?: number[] | null
-          folder_ids?: number[] | null
-          folder_names?: string[] | null
-          include_subfolders?: boolean | null
-          scope_restricted?: boolean | null
-          knowledge_id?: number
-          document_id?: number
-          source_config?: {
-            url?: string
-          }
-          external_provider?: string | null
-          external_mode?: string | null
-          external_id?: string | null
-          external_scope?: string | null
-          external_target_type?: string | null
-          external_node_id?: string | null
-          external_document_id?: string | null
-          external_parent_id?: string | null
-          video_count?: number | null
-          site?: string | null
-          source_url?: string | null
-          cover_url?: string | null
-        }> =
+        const pendingContexts: SubtaskContextBrief[] =
           existingContexts?.map(ctx => ({
             id: ctx.id,
             context_type: ctx.context_type,
@@ -1396,6 +1361,11 @@ export function useChatStreamHandlers({
             file_extension: ctx.file_extension ?? undefined,
             file_size: ctx.file_size ?? undefined,
             mime_type: ctx.mime_type ?? undefined,
+            source: ctx.source ?? undefined,
+            dingtalk_node_id: ctx.dingtalk_node_id ?? undefined,
+            doc_url: ctx.doc_url ?? undefined,
+            dingtalk_source: ctx.dingtalk_source ?? undefined,
+            read_at: ctx.read_at ?? undefined,
             document_count: ctx.document_count ?? undefined,
             document_ids: ctx.document_ids ?? undefined,
             folder_ids: ctx.folder_ids ?? undefined,

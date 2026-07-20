@@ -110,6 +110,42 @@ class TestSubtaskContextBrief:
         assert brief.document_id == 456
         assert brief.source_config == {"url": "https://example.com/table"}
 
+    def test_context_brief_exposes_dingtalk_attachment_display_fields(self) -> None:
+        """DingTalk materialized attachments expose metadata for chat badges."""
+        from app.models.subtask_context import (
+            ContextStatus,
+            ContextType,
+            SubtaskContext,
+        )
+        from app.schemas.subtask_context import SubtaskContextBrief
+
+        context = SubtaskContext(
+            subtask_id=100,
+            user_id=1,
+            context_type=ContextType.ATTACHMENT.value,
+            name="Project Plan.md",
+            status=ContextStatus.READY.value,
+            type_data={
+                "source": "dingtalk_doc",
+                "file_extension": ".md",
+                "mime_type": "text/markdown",
+                "file_size": 1024,
+                "dingtalk_node_id": "node-1",
+                "doc_url": "https://alidocs.dingtalk.com/i/nodes/node-1",
+                "dingtalk_source": "docs",
+                "read_at": "2026-07-20T15:22:36",
+            },
+        )
+        context.id = 777
+
+        brief = SubtaskContextBrief.from_model(context)
+
+        assert brief.source == "dingtalk_doc"
+        assert brief.dingtalk_node_id == "node-1"
+        assert brief.doc_url == "https://alidocs.dingtalk.com/i/nodes/node-1"
+        assert brief.dingtalk_source == "docs"
+        assert brief.read_at == "2026-07-20T15:22:36"
+
 
 class TestContextServiceAttachmentCopy:
     """Test trusted attachment copy operations."""

@@ -671,6 +671,11 @@ export interface SubtaskContextBrief {
   file_extension?: string | null
   file_size?: number | null
   mime_type?: string | null
+  source?: string | null
+  dingtalk_node_id?: string | null
+  doc_url?: string | null
+  dingtalk_source?: 'docs' | 'wikispace' | string | null
+  read_at?: string | null
   // Knowledge base fields (from type_data)
   knowledge_id?: number | null
   document_count?: number | null

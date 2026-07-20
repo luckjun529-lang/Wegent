@@ -23,9 +23,9 @@ class DingtalkSyncedNode(Base):
     """
     DingTalk synced document node model.
 
-    Stores DingTalk document/folder nodes synced from the DingTalk Docs MCP server.
+    Stores DingTalk document/folder nodes synced from DingTalk DWS.
     Each node represents a document, folder, or file visible to the user.
-    content_updated_at stores the updateTime returned by the list_nodes MCP tool.
+    content_updated_at stores the updateTime returned by DWS node listing.
     """
 
     __tablename__ = "dingtalk_synced_nodes"

@@ -138,9 +138,9 @@
       "syncSuccess": "Sync completed",
       "syncFailed": "Sync failed",
       "syncHint": "Click the sync button to fetch documents from DingTalk",
-      "notConfigured": "DingTalk Docs Not Configured",
-      "configureHint": "Please enable and configure the DingTalk Docs MCP service in Settings first, then you can browse and sync DingTalk documents here.",
-      "goToSettings": "Go to Settings",
+      "notConfigured": "DingTalk is not authorized or authorization has expired",
+      "configureHint": "Authorize DingTalk first, then you can browse and sync DingTalk documents here.",
+      "goToSettings": "Authorize",
       "emptyState": "No Documents",
       "lastSynced": "Last synced",
       "docCount": "{{count}} documents",
@@ -158,8 +158,8 @@
       "wikispace": "Knowledge Base",
       "wikispaceSyncHint": "Click sync to pull knowledge bases from DingTalk",
       "wikispaceEmpty": "No knowledge base content",
-      "wikispaceNotConfigured": "DingTalk Knowledge Base MCP is not configured",
-      "wikispaceConfigureHint": "Please go to settings to configure DingTalk Knowledge Base MCP"
+      "wikispaceNotConfigured": "DingTalk is not authorized or authorization has expired",
+      "wikispaceConfigureHint": "Authorize DingTalk first, then you can sync DingTalk knowledge bases"
     },
     "groupFilter": {
       "all": "All Groups"

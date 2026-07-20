@@ -16,6 +16,19 @@ def build_context_display_fields(
     """Build public display fields for a SubtaskContext."""
     data = type_data or {}
 
+    if context_type == "attachment" and data.get("source") == "dingtalk_doc":
+        fields = _build_attachment_fields(data)
+        fields.update(
+            {
+                "source": data.get("source"),
+                "dingtalk_node_id": data.get("dingtalk_node_id"),
+                "doc_url": data.get("doc_url"),
+                "dingtalk_source": data.get("dingtalk_source"),
+                "read_at": data.get("read_at"),
+            }
+        )
+        return fields
+
     if context_type == "attachment" and data.get("source") == "external_web_content":
         fields = _build_external_web_video_fields(data)
         fields.update(_build_attachment_fields(data))

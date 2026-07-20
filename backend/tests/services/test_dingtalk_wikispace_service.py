@@ -2,11 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for DingTalkWikiSpaceService — two-phase KB sync."""
+"""Tests for DingTalkWikiSpaceService DWS-based sync."""
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,25 +17,6 @@ from app.services.dingtalk_wikispace_service import (
     DingTalkWikiSpaceService,
     _sanitize_url_for_telemetry,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_text_content(data: object) -> MagicMock:
-    """Create a mock MCP content item with type='text' carrying JSON data."""
-    item = MagicMock()
-    item.type = "text"
-    item.text = json.dumps(data)
-    return item
-
-
-def _make_mcp_result(data: object) -> MagicMock:
-    """Create a mock MCP tool call result wrapping JSON data."""
-    result = MagicMock()
-    result.content = [_make_text_content(data)]
-    return result
 
 
 class TestSanitizeUrlForTelemetry:
@@ -57,61 +37,25 @@ class TestSanitizeUrlForTelemetry:
         assert sanitized == "<invalid-url>"
 
 
-# ---------------------------------------------------------------------------
-# _list_wiki_spaces
-# ---------------------------------------------------------------------------
-
-
 class TestListWikiSpaces:
     """Tests for DingTalkWikiSpaceService._list_wiki_spaces."""
 
     @pytest.mark.asyncio
-    async def test_returns_knowledge_bases_from_items_key(self) -> None:
-        """Returns KB nodes when list_wikiSpaces responds with an 'items' envelope."""
+    async def test_returns_org_wiki_spaces_from_dws(self) -> None:
+        """Organization knowledge bases are listed through DWS orgWikiSpace."""
         kb_data = [
             {"workspaceId": "WS001", "name": "KB One"},
             {"workspaceId": "WS002", "name": "KB Two"},
         ]
 
-        mock_session = AsyncMock()
-        mock_session.list_tools.return_value = MagicMock(tools=[])
-        mock_session.call_tool.return_value = _make_mcp_result({"items": kb_data})
+        with patch(
+            "app.services.dingtalk_wikispace_service.dingtalk_dws_service.list_spaces",
+            new=AsyncMock(return_value=kb_data),
+        ) as mock_list_spaces:
+            result = await DingTalkWikiSpaceService._list_wiki_spaces(user_id=9)
 
-        with patch.object(
-            DingTalkWikiSpaceService,
-            "_list_wiki_spaces",
-            wraps=DingTalkWikiSpaceService._list_wiki_spaces,
-        ):
-            with (
-                patch("mcp.client.streamable_http.streamablehttp_client") as mock_http,
-                patch("mcp.ClientSession") as mock_cls,
-            ):
-                mock_http.return_value.__aenter__ = AsyncMock(
-                    return_value=(MagicMock(), MagicMock(), None)
-                )
-                mock_http.return_value.__aexit__ = AsyncMock(return_value=False)
-                mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-                mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-                with (
-                    patch(
-                        "app.services.dingtalk_wikispace_service.streamablehttp_client",
-                        mock_http,
-                        create=True,
-                    ),
-                    patch(
-                        "app.services.dingtalk_wikispace_service.ClientSession",
-                        mock_cls,
-                        create=True,
-                    ),
-                ):
-                    result = await DingTalkWikiSpaceService._list_wiki_spaces(
-                        "https://ws.mcp.example.com"
-                    )
-
-        assert len(result) == 2
-        assert result[0]["workspaceId"] == "WS001"
-        assert result[1]["name"] == "KB Two"
+        assert result == kb_data
+        mock_list_spaces.assert_awaited_once_with(9, "orgWikiSpace")
 
 
 class TestListNodesInWikispace:
@@ -121,82 +65,105 @@ class TestListNodesInWikispace:
     async def test_recurses_into_root_folder_and_continues_root_pagination(
         self,
     ) -> None:
-        """Lists first page, recurses into folders, then continues root pagination."""
-        first_page = _make_mcp_result(
-            {
-                "items": [
-                    {"nodeId": "folder-1", "nodeType": "folder", "workspaceId": "WS1"},
-                    {"nodeId": "doc-1", "nodeType": "doc", "workspaceId": "WS1"},
-                ],
-                "nextPageToken": "page-2",
-            }
-        )
-        second_page = _make_mcp_result(
-            {
-                "items": [
-                    {"nodeId": "folder-2", "nodeType": "folder", "workspaceId": "WS1"},
+        """Lists first page, recurses into folders, then continues pagination."""
+        calls: list[str | None] = []
+
+        async def list_nodes(
+            user_id: int,
+            *,
+            workspace_id: str,
+            folder_id: str | None = None,
+            cursor: str | None = None,
+        ) -> tuple[list[dict], str | None]:
+            calls.append(cursor)
+            if cursor is None:
+                return (
+                    [
+                        {
+                            "nodeId": "folder-1",
+                            "nodeType": "folder",
+                            "workspaceId": "WS1",
+                        },
+                        {"nodeId": "doc-1", "nodeType": "doc", "workspaceId": "WS1"},
+                    ],
+                    "page-2",
+                )
+            return (
+                [
+                    {
+                        "nodeId": "folder-2",
+                        "nodeType": "folder",
+                        "workspaceId": "WS1",
+                    },
                     {"nodeId": "doc-2", "nodeType": "doc", "workspaceId": "WS1"},
-                ]
-            }
-        )
+                ],
+                None,
+            )
 
-        session = AsyncMock()
-        session.call_tool = AsyncMock(side_effect=[first_page, second_page])
-        all_nodes: list[dict[str, str]] = []
-
-        with patch.object(
-            DingTalkDocService,
-            "_list_nodes_recursive",
-            new=AsyncMock(),
-        ) as mock_recursive:
+        all_nodes: list[dict] = []
+        with (
+            patch(
+                "app.services.dingtalk_wikispace_service.dingtalk_dws_service.list_nodes",
+                new=AsyncMock(side_effect=list_nodes),
+            ),
+            patch.object(
+                DingTalkDocService,
+                "_list_nodes_recursive",
+                new=AsyncMock(),
+            ) as mock_recursive,
+        ):
             await DingTalkWikiSpaceService._list_nodes_in_wikispace(
-                session=session,
+                user_id=9,
                 workspace_id="WS1",
                 all_nodes=all_nodes,
             )
 
+        assert calls == [None, "page-2"]
         assert [node["nodeId"] for node in all_nodes] == [
             "folder-1",
             "doc-1",
             "folder-2",
             "doc-2",
         ]
-        assert session.call_tool.await_count == 2
+        assert all(node["parentId"] == "WS1" for node in all_nodes)
         assert mock_recursive.await_count == 2
-        first_recursive_call = mock_recursive.await_args_list[0]
-        assert first_recursive_call.kwargs["folder_id"] == "folder-1"
-        second_recursive_call = mock_recursive.await_args_list[1]
-        assert second_recursive_call.kwargs["folder_id"] == "folder-2"
+        assert mock_recursive.await_args_list[0].kwargs["folder_id"] == "folder-1"
+        assert mock_recursive.await_args_list[1].kwargs["folder_id"] == "folder-2"
 
     @pytest.mark.asyncio
     async def test_skips_folder_recursion_when_node_id_missing(self) -> None:
         """Folder entries without nodeId are not passed to recursive traversal."""
-        session = AsyncMock()
-        session.call_tool = AsyncMock(
-            return_value=_make_mcp_result(
-                {
-                    "items": [
-                        {"nodeType": "folder", "workspaceId": "WS1"},
-                        {"nodeId": "doc-1", "nodeType": "doc", "workspaceId": "WS1"},
-                    ]
-                }
-            )
-        )
-        all_nodes: list[dict[str, str]] = []
+        all_nodes: list[dict] = []
 
-        with patch.object(
-            DingTalkDocService,
-            "_list_nodes_recursive",
-            new=AsyncMock(),
-        ) as mock_recursive:
+        with (
+            patch(
+                "app.services.dingtalk_wikispace_service.dingtalk_dws_service.list_nodes",
+                new=AsyncMock(
+                    return_value=(
+                        [
+                            {"nodeType": "folder", "workspaceId": "WS1"},
+                            {
+                                "nodeId": "doc-1",
+                                "nodeType": "doc",
+                                "workspaceId": "WS1",
+                            },
+                        ],
+                        None,
+                    )
+                ),
+            ),
+            patch.object(
+                DingTalkDocService,
+                "_list_nodes_recursive",
+                new=AsyncMock(),
+            ) as mock_recursive,
+        ):
             await DingTalkWikiSpaceService._list_nodes_in_wikispace(
-                session=session,
+                user_id=9,
                 workspace_id="WS1",
                 all_nodes=all_nodes,
             )
 
-        # parentId is set to workspace_id for root-level nodes to ensure
-        # the directory tree correctly shows them under the KB folder.
         assert all_nodes == [
             {"nodeType": "folder", "workspaceId": "WS1", "parentId": "WS1"},
             {
@@ -211,17 +178,21 @@ class TestListNodesInWikispace:
     @pytest.mark.asyncio
     async def test_handles_empty_first_page_without_recursion(self) -> None:
         """Empty result stops pagination and avoids recursive folder traversal."""
-        session = AsyncMock()
-        session.call_tool = AsyncMock(return_value=_make_mcp_result({"items": []}))
-        all_nodes: list[dict[str, str]] = []
+        all_nodes: list[dict] = []
 
-        with patch.object(
-            DingTalkDocService,
-            "_list_nodes_recursive",
-            new=AsyncMock(),
-        ) as mock_recursive:
+        with (
+            patch(
+                "app.services.dingtalk_wikispace_service.dingtalk_dws_service.list_nodes",
+                new=AsyncMock(return_value=([], None)),
+            ),
+            patch.object(
+                DingTalkDocService,
+                "_list_nodes_recursive",
+                new=AsyncMock(),
+            ) as mock_recursive,
+        ):
             await DingTalkWikiSpaceService._list_nodes_in_wikispace(
-                session=session,
+                user_id=9,
                 workspace_id="WS1",
                 all_nodes=all_nodes,
             )
@@ -230,81 +201,27 @@ class TestListNodesInWikispace:
         mock_recursive.assert_not_awaited()
 
 
-class TestParseListNodesResult:
-    """Tests for DingTalkDocService._parse_list_nodes_result."""
-
-    def test_returns_knowledge_bases_from_wiki_spaces_key(self) -> None:
-        """Returns KB nodes when list_wikiSpaces responds with a 'wikiSpaces' key."""
-        kb_data = [{"workspaceId": "WS100", "name": "Org KB"}]
-        result, token = DingTalkDocService._parse_list_nodes_result(
-            _make_mcp_result({"wikiSpaces": kb_data})
-        )
-        assert len(result) == 1
-        assert result[0]["workspaceId"] == "WS100"
-        assert token is None
-
-    @pytest.mark.parametrize("key", ["spaces", "spaceList"])
-    def test_supports_extended_list_keys(self, key: str) -> None:
-        """All supported alternative list keys are parsed correctly."""
-        payload = {key: [{"workspaceId": "WS200", "name": f"Node from {key}"}]}
-
-        result, token = DingTalkDocService._parse_list_nodes_result(
-            _make_mcp_result(payload)
-        )
-
-        assert len(result) == 1
-        assert result[0]["workspaceId"] == "WS200"
-        assert token is None
-
-    def test_returns_empty_list_when_no_content(self) -> None:
-        """Returns empty list when the MCP result has no content."""
-        empty_result = MagicMock()
-        empty_result.content = []
-        result, token = DingTalkDocService._parse_list_nodes_result(empty_result)
-        assert result == []
-        assert token is None
-
-    def test_pagination_token_extracted(self) -> None:
-        """nextPageToken is extracted from the response envelope."""
-        data = {
-            "items": [{"workspaceId": "WS1", "name": "KB 1"}],
-            "nextPageToken": "tok2",
-        }
-        result, token = DingTalkDocService._parse_list_nodes_result(
-            _make_mcp_result(data)
-        )
-        assert len(result) == 1
-        assert token == "tok2"
-
-
-# ---------------------------------------------------------------------------
-# _fetch_all_wikispace_nodes
-# ---------------------------------------------------------------------------
-
-
 class TestFetchAllWikispaceNodes:
     """Tests for DingTalkWikiSpaceService._fetch_all_wikispace_nodes."""
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_kbs(self) -> None:
-        """Returns empty list when list_wikiSpaces returns no knowledge bases."""
+        """Returns empty list when DWS returns no knowledge bases."""
         with patch.object(
             DingTalkWikiSpaceService,
             "_list_wiki_spaces",
             new=AsyncMock(return_value=[]),
         ):
             result = await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(
-                wikispace_mcp_url="https://ws.mcp.example.com",
-                docs_mcp_url="https://docs.mcp.example.com",
+                user_id=9
             )
+
         assert result == []
 
     @pytest.mark.asyncio
     async def test_adds_kb_root_as_folder_node(self) -> None:
         """Each knowledge base is added as a folder-type root node."""
         kb_nodes = [{"workspaceId": "WSABC", "name": "Test KB"}]
-        mock_session = AsyncMock()
-        mock_session.initialize = AsyncMock()
 
         with (
             patch.object(
@@ -316,20 +233,10 @@ class TestFetchAllWikispaceNodes:
                 DingTalkWikiSpaceService,
                 "_list_nodes_in_wikispace",
                 new=AsyncMock(return_value=None),
-            ),
-            patch("mcp.client.streamable_http.streamablehttp_client") as mock_http,
-            patch("mcp.ClientSession") as mock_cls,
+            ) as mock_list_nodes,
         ):
-            mock_http.return_value.__aenter__ = AsyncMock(
-                return_value=(MagicMock(), MagicMock(), None)
-            )
-            mock_http.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(
-                wikispace_mcp_url="https://ws.mcp.example.com",
-                docs_mcp_url="https://docs.mcp.example.com",
+                user_id=9
             )
 
         assert len(result) == 1
@@ -338,52 +245,9 @@ class TestFetchAllWikispaceNodes:
         assert kb_root["nodeType"] == "folder"
         assert kb_root["workspaceId"] == "WSABC"
         assert kb_root["name"] == "Test KB"
-
-    @pytest.mark.asyncio
-    async def test_uses_wikispace_mcp_url_as_docs_fallback(self) -> None:
-        """Falls back to wikispace MCP URL when docs MCP URL is not configured."""
-        kb_nodes = [{"workspaceId": "WS1", "name": "KB 1"}]
-        captured_sessions: list = []
-
-        async def capture_session(
-            session: object, workspace_id: str, all_nodes: list
-        ) -> None:
-            captured_sessions.append(session)
-
-        mock_session = AsyncMock()
-        mock_session.initialize = AsyncMock()
-
-        with (
-            patch.object(
-                DingTalkWikiSpaceService,
-                "_list_wiki_spaces",
-                new=AsyncMock(return_value=kb_nodes),
-            ),
-            patch.object(
-                DingTalkWikiSpaceService,
-                "_list_nodes_in_wikispace",
-                new=AsyncMock(side_effect=capture_session),
-            ),
-            patch("mcp.client.streamable_http.streamablehttp_client") as mock_http,
-            patch("mcp.ClientSession") as mock_cls,
-        ):
-            mock_http.return_value.__aenter__ = AsyncMock(
-                return_value=(MagicMock(), MagicMock(), None)
-            )
-            mock_http.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-            await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(
-                wikispace_mcp_url="https://ws.mcp.example.com",
-                docs_mcp_url=None,
-            )
-
-        assert len(captured_sessions) == 1
-        mock_http.assert_called_once()
-        call_args = mock_http.call_args
-        assert call_args is not None
-        assert call_args.kwargs.get("url") == "https://ws.mcp.example.com"
+        mock_list_nodes.assert_awaited_once()
+        assert mock_list_nodes.await_args.kwargs["user_id"] == 9
+        assert mock_list_nodes.await_args.kwargs["workspace_id"] == "WSABC"
 
     @pytest.mark.asyncio
     async def test_skips_kb_with_no_workspace_id(self) -> None:
@@ -395,12 +259,11 @@ class TestFetchAllWikispaceNodes:
         list_nodes_calls: list[str] = []
 
         async def track_call(
-            session: object, workspace_id: str, all_nodes: list
+            user_id: int,
+            workspace_id: str,
+            all_nodes: list,
         ) -> None:
             list_nodes_calls.append(workspace_id)
-
-        mock_session = AsyncMock()
-        mock_session.initialize = AsyncMock()
 
         with (
             patch.object(
@@ -413,18 +276,9 @@ class TestFetchAllWikispaceNodes:
                 "_list_nodes_in_wikispace",
                 new=AsyncMock(side_effect=track_call),
             ),
-            patch("mcp.client.streamable_http.streamablehttp_client") as mock_http,
-            patch("mcp.ClientSession") as mock_cls,
         ):
-            mock_http.return_value.__aenter__ = AsyncMock(
-                return_value=(MagicMock(), MagicMock(), None)
-            )
-            mock_http.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(
-                wikispace_mcp_url="https://ws.mcp.example.com",
+                user_id=9
             )
 
         assert list_nodes_calls == ["WS2"]
@@ -441,15 +295,14 @@ class TestFetchAllWikispaceNodes:
         call_count = 0
 
         async def maybe_fail(
-            session: object, workspace_id: str, all_nodes: list
+            user_id: int,
+            workspace_id: str,
+            all_nodes: list,
         ) -> None:
             nonlocal call_count
             call_count += 1
             if workspace_id == "WS_FAIL":
-                raise ConnectionError("MCP connection failed")
-
-        mock_session = AsyncMock()
-        mock_session.initialize = AsyncMock()
+                raise ConnectionError("DWS connection failed")
 
         with (
             patch.object(
@@ -462,18 +315,9 @@ class TestFetchAllWikispaceNodes:
                 "_list_nodes_in_wikispace",
                 new=AsyncMock(side_effect=maybe_fail),
             ),
-            patch("mcp.client.streamable_http.streamablehttp_client") as mock_http,
-            patch("mcp.ClientSession") as mock_cls,
         ):
-            mock_http.return_value.__aenter__ = AsyncMock(
-                return_value=(MagicMock(), MagicMock(), None)
-            )
-            mock_http.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
             result = await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(
-                wikispace_mcp_url="https://ws.mcp.example.com",
+                user_id=9
             )
 
         assert call_count == 2
@@ -620,75 +464,61 @@ class TestReadHelpers:
         assert status["last_synced_at"] == newer
 
 
-# ---------------------------------------------------------------------------
-# sync_wikispace_nodes (integration-style with mocked MCP)
-# ---------------------------------------------------------------------------
-
-
 class TestSyncWikispaceNodes:
     """Tests for DingTalkWikiSpaceService.sync_wikispace_nodes."""
 
     @pytest.mark.asyncio
-    @patch("app.services.dingtalk_wikispace_service.UserMCPService")
-    @patch("app.services.dingtalk_wikispace_service.DingTalkDocService")
-    async def test_raises_when_not_configured(
-        self, _mock_doc_service: MagicMock, mock_mcp_svc: MagicMock
-    ) -> None:
-        """Raises ValueError when wikispace MCP URL is not configured."""
-        mock_mcp_svc.get_provider_service_config.return_value = {"enabled": False}
-        mock_user = MagicMock()
-        mock_db = MagicMock()
+    async def test_raises_when_not_authorized(self) -> None:
+        """Raises ValueError when DingTalk DWS is not authorized."""
+        mock_user = MagicMock(id=9)
 
-        with pytest.raises(ValueError, match="not configured"):
-            await DingTalkWikiSpaceService.sync_wikispace_nodes(mock_user, mock_db)
+        with patch(
+            "app.services.dingtalk_wikispace_service.dingtalk_dws_service.auth_status",
+            new=AsyncMock(return_value={"is_authenticated": False}),
+        ):
+            with pytest.raises(ValueError, match="not authorized"):
+                await DingTalkWikiSpaceService.sync_wikispace_nodes(
+                    mock_user,
+                    MagicMock(),
+                )
 
     @pytest.mark.asyncio
-    @patch("app.services.dingtalk_wikispace_service.UserMCPService")
-    async def test_uses_docs_mcp_url_for_list_nodes(
-        self, mock_mcp_svc: MagicMock
-    ) -> None:
-        """Passes the docs MCP URL to _fetch_all_wikispace_nodes."""
-        mock_mcp_svc.get_provider_service_config.return_value = {
-            "enabled": True,
-            "url": "https://ws.mcp.example.com",
-        }
-        mock_user = MagicMock()
+    async def test_fetches_org_spaces_and_syncs_wikispace_source(self) -> None:
+        """Authorized sync persists org knowledge-base nodes as wikispace rows."""
+        mock_user = MagicMock(id=9)
         mock_db = MagicMock()
-
-        captured: dict = {}
-
-        async def fake_fetch(
-            wikispace_mcp_url: str,
-            docs_mcp_url: str | None = None,
-        ) -> list:
-            captured["wikispace_url"] = wikispace_mcp_url
-            captured["docs_url"] = docs_mcp_url
-            return []
+        nodes = [{"nodeId": "doc-1", "nodeType": "doc", "workspaceId": "WS1"}]
 
         with (
+            patch(
+                "app.services.dingtalk_wikispace_service.dingtalk_dws_service.auth_status",
+                new=AsyncMock(return_value={"is_authenticated": True}),
+            ) as mock_auth,
             patch.object(
                 DingTalkWikiSpaceService,
                 "_fetch_all_wikispace_nodes",
-                new=fake_fetch,
-            ),
-            patch(
-                "app.services.dingtalk_wikispace_service.DingTalkDocService"
-                ".get_user_dingtalk_mcp_url",
-                return_value="https://docs.mcp.example.com",
-            ),
-            patch(
-                "app.services.dingtalk_wikispace_service.DingTalkDocService"
-                "._sync_nodes_to_db",
+                new=AsyncMock(return_value=nodes),
+            ) as mock_fetch,
+            patch.object(
+                DingTalkDocService,
+                "_sync_nodes_to_db",
                 return_value={
-                    "added": 0,
+                    "added": 1,
                     "updated": 0,
                     "deleted": 0,
-                    "total": 0,
+                    "total": 1,
                     "sync_time": datetime.now(),
                 },
-            ),
+            ) as mock_sync,
         ):
-            await DingTalkWikiSpaceService.sync_wikispace_nodes(mock_user, mock_db)
+            result = await DingTalkWikiSpaceService.sync_wikispace_nodes(
+                mock_user,
+                mock_db,
+            )
 
-        assert captured["wikispace_url"] == "https://ws.mcp.example.com"
-        assert captured["docs_url"] == "https://docs.mcp.example.com"
+        mock_auth.assert_awaited_once_with(mock_user.id)
+        mock_fetch.assert_awaited_once_with(mock_user.id)
+        mock_sync.assert_called_once()
+        assert mock_sync.call_args.kwargs["source"] == DingTalkNodeSource.WIKISPACE
+        assert result["added"] == 1
+        assert result["mcp_nodes_fetched"] == 1

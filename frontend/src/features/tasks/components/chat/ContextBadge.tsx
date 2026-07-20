@@ -70,6 +70,7 @@ export default function ContextBadge({
   disableUrlClick = false,
 }: ContextBadgeProps) {
   const { t } = useTranslation('knowledge')
+  const { t: tChat } = useTranslation('chat')
   const Icon = getContextIcon(context.type)
 
   // Get badge color based on context type
@@ -162,7 +163,7 @@ export default function ContextBadge({
           </span>
         )}
         {context.type === 'dingtalk_doc' && (
-          <span className="text-xs opacity-70 truncate">{t('chat:dingtalkDocs.docBadgeHint')}</span>
+          <span className="text-xs opacity-70 truncate">{tChat('dingtalkDocs.docBadgeHint')}</span>
         )}
         {context.type === 'external_knowledge' && (
           <span className="text-xs opacity-70 truncate">

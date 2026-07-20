@@ -8,12 +8,37 @@
 
 import client from './client'
 import type {
+  DingtalkDwsAuthStatusResponse,
+  DingtalkDwsDeviceLoginResponse,
   DingtalkDocTreeResponse,
   DingtalkSyncStatus,
   DingtalkSyncResult,
 } from '@/types/dingtalk-doc'
 
 export const dingtalkDocApi = {
+  /**
+   * Get DingTalk DWS authorization status for the current user.
+   */
+  getAuthStatus: async (): Promise<DingtalkDwsAuthStatusResponse> => {
+    return client.get<DingtalkDwsAuthStatusResponse>('/dingtalk-dws/auth/status')
+  },
+
+  /**
+   * Start headless DingTalk device-code authorization.
+   */
+  startDeviceLogin: async (): Promise<DingtalkDwsDeviceLoginResponse> => {
+    return client.post<DingtalkDwsDeviceLoginResponse>('/dingtalk-dws/auth/device-login')
+  },
+
+  /**
+   * Poll a DingTalk device-code authorization session.
+   */
+  getDeviceLoginStatus: async (sessionId: string): Promise<DingtalkDwsDeviceLoginResponse> => {
+    return client.get<DingtalkDwsDeviceLoginResponse>(
+      `/dingtalk-dws/auth/device-login/${sessionId}`
+    )
+  },
+
   /**
    * Get all synced DingTalk document nodes as a tree structure.
    */
@@ -22,7 +47,7 @@ export const dingtalkDocApi = {
   },
 
   /**
-   * Trigger sync of DingTalk documents from the user's MCP server.
+   * Trigger sync of DingTalk documents through backend DWS.
    */
   syncDocs: async (): Promise<DingtalkSyncResult> => {
     return client.post<DingtalkSyncResult>('/dingtalk-docs/sync')
@@ -50,7 +75,7 @@ export const dingtalkDocApi = {
   },
 
   /**
-   * Trigger sync of DingTalk wikispace nodes from the user's wikispace MCP server.
+   * Trigger sync of DingTalk wikispace nodes through backend DWS.
    */
   syncWikispaceNodes: async (): Promise<DingtalkSyncResult> => {
     return client.post<DingtalkSyncResult>('/dingtalk-wikispace/sync')

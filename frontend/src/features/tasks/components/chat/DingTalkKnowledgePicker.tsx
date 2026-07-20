@@ -132,7 +132,7 @@ export function useDingTalkKnowledgeSelection({
     const contexts: DingTalkDocContext[] = []
     const visit = (item: DingtalkDocNode) => {
       const selectionKey = getDingTalkSelectionKey(item.source, item.dingtalk_node_id)
-      if (!currentSelectedIds.has(selectionKey)) {
+      if (item.node_type !== 'folder' && !currentSelectedIds.has(selectionKey)) {
         contexts.push(buildDingTalkDocContext(item))
       }
       item.children?.forEach(visit)
@@ -212,8 +212,8 @@ export function DingTalkDocsRootRow({
   const { t } = useTranslation('chat')
   if (loading) return <DingTalkPickerLoading label={t('common:actions.loading')} />
   if (error) return <DingTalkPickerError message={error} onRetry={onRetry} />
-  if (!configured) return <DingTalkPickerEmpty label={t('chat:dingtalkDocs.notConfigured')} />
-  if (nodes.length === 0) return <DingTalkPickerEmpty label={t('chat:dingtalkDocs.empty')} />
+  if (!configured) return <DingTalkPickerEmpty label={t('dingtalkDocs.notConfigured')} />
+  if (nodes.length === 0) return <DingTalkPickerEmpty label={t('dingtalkDocs.empty')} />
 
   const state = getDingTalkNodeState(nodes, selectedIds)
   return (
@@ -234,9 +234,7 @@ export function DingTalkDocsRootRow({
         <span className="flex min-w-0 items-center gap-2">
           <FolderOpen className="h-4 w-4 shrink-0 text-text-muted" />
           <span className="min-w-0">
-            <span className="block truncate text-sm font-medium">
-              {t('chat:dingtalkDocs.allDocs')}
-            </span>
+            <span className="block truncate text-sm font-medium">{t('dingtalkDocs.allDocs')}</span>
             <span className="block text-xs text-text-muted">
               {t('knowledge:picker.count.documents', { count: totalCount })}
             </span>
@@ -277,12 +275,11 @@ export function DingTalkWikispaceRows({
   const { t } = useTranslation('chat')
   if (loading) return <DingTalkPickerLoading label={t('common:actions.loading')} />
   if (error) return <DingTalkPickerError message={error} onRetry={onRetry} />
-  if (!configured)
-    return <DingTalkPickerEmpty label={t('chat:dingtalkDocs.wikispaceNotConfigured')} />
+  if (!configured) return <DingTalkPickerEmpty label={t('dingtalkDocs.wikispaceNotConfigured')} />
 
   const visibleNodes = nodes.filter(node => dingTalkNodeMatchesSearch(node, query))
   if (visibleNodes.length === 0)
-    return <DingTalkPickerEmpty label={t('chat:dingtalkDocs.wikispaceEmpty')} />
+    return <DingTalkPickerEmpty label={t('dingtalkDocs.wikispaceEmpty')} />
 
   return (
     <div className="space-y-1 p-2">

@@ -25,9 +25,9 @@ import { DingtalkNotConfigured } from './dingtalk-not-configured'
 import type { DingtalkDocNode, DingtalkSyncStatus } from '@/types/dingtalk-doc'
 
 interface DingtalkDocsPageProps {
-  /** Whether DingTalk Docs MCP is configured for the user */
+  /** Whether DingTalk Docs is authorized for the user */
   isConfigured: boolean
-  /** Whether DingTalk Wikispace MCP is configured for the user */
+  /** Whether DingTalk Wikispace is authorized for the user */
   isWikispaceConfigured?: boolean
   /** Callback when sync completes (to refresh sidebar count) */
   onSyncComplete?: () => void
@@ -308,22 +308,22 @@ function DingtalkEmptyState({
   )
 }
 
-/** Shown in wikispace tab when wikispace MCP is not configured. */
+/** Shown in wikispace tab when DingTalk is not authorized. */
 function WikispaceNotConfigured({ t }: { t: TFunction }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
       <BookOpen className="w-16 h-16 text-text-muted mb-4" />
       <h3 className="text-lg font-medium text-text-primary mb-2">
-        {t('document.dingtalk.wikispaceNotConfigured', '钉钉知识库 MCP 未配置')}
+        {t('document.dingtalk.wikispaceNotConfigured', '钉钉未授权或授权已过期')}
       </h3>
       <p className="text-sm text-text-muted mb-4">
-        {t('document.dingtalk.wikispaceConfigureHint', '请前往设置配置钉钉知识库 MCP')}
+        {t('document.dingtalk.wikispaceConfigureHint', '请先完成钉钉授权，然后即可同步钉钉知识库')}
       </p>
       <Link
         href="/settings?section=integrations&tab=integrations"
         className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 font-medium transition-colors"
       >
-        {t('document.dingtalk.goToSettings', '前往设置')}
+        {t('document.dingtalk.goToSettings', '前往授权')}
         <ExternalLink className="w-3.5 h-3.5" />
       </Link>
     </div>

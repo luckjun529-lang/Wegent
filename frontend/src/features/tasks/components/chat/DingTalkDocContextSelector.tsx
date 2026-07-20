@@ -12,8 +12,7 @@
 
 'use client'
 
-import React, { useState, useCallback, useEffect, useMemo } from 'react'
-import Link from 'next/link'
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   Folder,
   FolderOpen,
@@ -25,6 +24,7 @@ import {
   Check,
   Minus,
   Search,
+  KeyRound,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -32,9 +32,12 @@ import { dingtalkDocApi } from '@/apis/dingtalk-doc'
 import type { DingtalkDocNode, DingtalkNodeSource } from '@/types/dingtalk-doc'
 import type { DingTalkDocContext, ContextItem } from '@/types/context'
 
-/** Collect all descendant selection keys (including self) from a node. */
+const MAX_DINGTALK_DOC_CONTEXTS = 10
+
+/** Collect all selectable descendant selection keys from a node. */
 export function collectDescendants(node: DingtalkDocNode): string[] {
-  const ids: string[] = [getDingTalkSelectionKey(node.source, node.dingtalk_node_id)]
+  const ids: string[] =
+    node.node_type === 'folder' ? [] : [getDingTalkSelectionKey(node.source, node.dingtalk_node_id)]
   if (node.children) {
     for (const child of node.children) {
       ids.push(...collectDescendants(child))
@@ -50,12 +53,8 @@ export function getDingTalkSelectionKey(source: DingtalkNodeSource, nodeId: stri
 
 /** Check if all nodes under a tree node are selected. */
 export function isNodeFullySelected(node: DingtalkDocNode, selected: Set<string>): boolean {
-  const selectionKey = getDingTalkSelectionKey(node.source, node.dingtalk_node_id)
-  if (!selected.has(selectionKey)) return false
-  if (node.children) {
-    return node.children.every(child => isNodeFullySelected(child, selected))
-  }
-  return true
+  const allIds = collectDescendants(node)
+  return allIds.length > 0 && allIds.every(id => selected.has(id))
 }
 
 /** Check if some (but not all) nodes under a tree node are selected. */
@@ -248,6 +247,8 @@ export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = 
   const [error, setError] = useState<string | null>(null)
   const [isConfigured, setIsConfigured] = useState(true)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [authStatus, setAuthStatus] = useState<string>('unauthenticated')
 
   const [wikispaceNodes, setWikispaceNodes] = useState<DingtalkDocNode[]>([])
   const [wikispaceTotalCount, setWikispaceTotalCount] = useState(0)
@@ -257,10 +258,25 @@ export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = 
   const [wikispaceConfigured, setWikispaceConfigured] = useState(false)
   const [wikispaceLastSyncedAt, setWikispaceLastSyncedAt] = useState<string | null>(null)
 
+  const refreshAuthStatus = useCallback(async () => {
+    const status = await dingtalkDocApi.getAuthStatus()
+    setIsAuthenticated(status.is_authenticated)
+    setAuthStatus(status.auth_status)
+    return status
+  }, [])
+
   const fetchDocs = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
+      const auth = await refreshAuthStatus()
+      if (!auth.is_authenticated) {
+        setNodes([])
+        setTotalCount(0)
+        setIsConfigured(false)
+        setLastSyncedAt(null)
+        return
+      }
       const [tree, status] = await Promise.all([
         dingtalkDocApi.getDocs(),
         dingtalkDocApi.getSyncStatus(),
@@ -271,16 +287,24 @@ export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = 
       setLastSyncedAt(status.last_synced_at)
     } catch (err) {
       console.error('Failed to fetch DingTalk docs:', err)
-      setError(t('chat:dingtalkDocs.loadFailed'))
+      setError(t('dingtalkDocs.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [t])
+  }, [refreshAuthStatus, t])
 
   const fetchWikispace = useCallback(async () => {
     setWikispaceLoading(true)
     setWikispaceError(null)
     try {
+      const auth = await refreshAuthStatus()
+      if (!auth.is_authenticated) {
+        setWikispaceNodes([])
+        setWikispaceTotalCount(0)
+        setWikispaceConfigured(false)
+        setWikispaceLastSyncedAt(null)
+        return
+      }
       const [tree, status] = await Promise.all([
         dingtalkDocApi.getWikispaceNodes(),
         dingtalkDocApi.getWikispaceSyncStatus(),
@@ -291,11 +315,11 @@ export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = 
       setWikispaceLastSyncedAt(status.last_synced_at)
     } catch (err) {
       console.error('Failed to sync DingTalk wikispace:', err)
-      setWikispaceError(t('chat:dingtalkDocs.loadFailed'))
+      setWikispaceError(t('dingtalkDocs.loadFailed'))
     } finally {
       setWikispaceLoading(false)
     }
-  }, [t])
+  }, [refreshAuthStatus, t])
 
   useEffect(() => {
     if (!enabled) return
@@ -311,7 +335,7 @@ export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = 
       await fetchDocs()
     } catch (err) {
       console.error('Failed to sync DingTalk docs:', err)
-      setError(t('chat:dingtalkDocs.syncFailed'))
+      setError(t('dingtalkDocs.syncFailed'))
     } finally {
       setSyncing(false)
     }
@@ -325,11 +349,21 @@ export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = 
       await fetchWikispace()
     } catch (err) {
       console.error('Failed to sync DingTalk wikispace:', err)
-      setWikispaceError(t('chat:dingtalkDocs.syncFailed'))
+      setWikispaceError(t('dingtalkDocs.syncFailed'))
     } finally {
       setWikispaceSyncing(false)
     }
   }, [fetchWikispace, t])
+
+  const syncAllAfterAuth = useCallback(async () => {
+    setIsAuthenticated(true)
+    setAuthStatus('authenticated')
+    setIsConfigured(true)
+    setWikispaceConfigured(true)
+    setError(null)
+    setWikispaceError(null)
+    await Promise.allSettled([syncDocs(), syncWikispace()])
+  }, [syncDocs, syncWikispace])
 
   return {
     nodes,
@@ -338,7 +372,10 @@ export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = 
     syncing,
     error,
     isConfigured,
+    isAuthenticated,
+    authStatus,
     lastSyncedAt,
+    refreshAuthStatus,
     fetchDocs,
     syncDocs,
     wikispaceNodes,
@@ -350,6 +387,7 @@ export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = 
     wikispaceLastSyncedAt,
     fetchWikispace,
     syncWikispace,
+    syncAllAfterAuth,
   }
 }
 
@@ -380,12 +418,21 @@ export function DingTalkDocContextSelector({
   const { t } = useTranslation('chat')
   const [activeSection, setActiveSection] = useState<'my-docs' | 'wikispace'>('my-docs')
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectionError, setSelectionError] = useState<string | null>(null)
+  const [authSessionId, setAuthSessionId] = useState<string | null>(null)
+  const [verificationUrl, setVerificationUrl] = useState<string | null>(null)
+  const [userCode, setUserCode] = useState<string | null>(null)
+  const [authPolling, setAuthPolling] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const authStartingRef = useRef(false)
   const {
     nodes,
     loading,
     syncing,
     error,
     isConfigured,
+    isAuthenticated,
+    authStatus,
     lastSyncedAt,
     fetchDocs,
     syncDocs,
@@ -397,26 +444,36 @@ export function DingTalkDocContextSelector({
     wikispaceLastSyncedAt,
     fetchWikispace,
     syncWikispace,
+    syncAllAfterAuth,
   } = useDingTalkDocTrees()
+
+  const selectedDocCount = useMemo(() => selectedContexts.size, [selectedContexts])
+
+  const completeAuth = useCallback(async () => {
+    authStartingRef.current = false
+    setAuthSessionId(null)
+    setVerificationUrl(null)
+    setUserCode(null)
+    setAuthPolling(false)
+    await syncAllAfterAuth()
+  }, [syncAllAfterAuth])
 
   const handleToggle = useCallback(
     (node: DingtalkDocNode) => {
       const selectionKey = getDingTalkSelectionKey(node.source, node.dingtalk_node_id)
+      setSelectionError(null)
 
       if (node.node_type === 'folder') {
-        // Collect all descendant IDs (including folder itself)
         const allIds = collectDescendants(node)
         const allSelected = allIds.every(id => selectedContexts.has(id))
 
         if (allSelected) {
-          // Deselect all descendants
           onDeselectMultiple(allIds)
         } else {
-          // Select all descendants not yet selected
           const toAdd: DingTalkDocContext[] = []
           const addNode = (n: DingtalkDocNode) => {
             const childSelectionKey = getDingTalkSelectionKey(n.source, n.dingtalk_node_id)
-            if (!selectedContexts.has(childSelectionKey)) {
+            if (n.node_type !== 'folder' && !selectedContexts.has(childSelectionKey)) {
               toAdd.push(buildDingTalkDocContext(n))
             }
             if (n.children) {
@@ -424,39 +481,120 @@ export function DingTalkDocContextSelector({
             }
           }
           addNode(node)
-          if (toAdd.length > 0) {
-            onSelectMultiple(toAdd)
+          const availableSlots = MAX_DINGTALK_DOC_CONTEXTS - selectedDocCount
+          if (availableSlots <= 0) {
+            setSelectionError(t('dingtalkDocs.maxSelected', { count: MAX_DINGTALK_DOC_CONTEXTS }))
+            return
+          }
+          const limited = toAdd.slice(0, availableSlots)
+          if (limited.length < toAdd.length) {
+            setSelectionError(t('dingtalkDocs.maxSelected', { count: MAX_DINGTALK_DOC_CONTEXTS }))
+          }
+          if (limited.length > 0) {
+            onSelectMultiple(limited)
           }
         }
       } else {
-        // Single doc/file toggle
         if (selectedContexts.has(selectionKey)) {
           onDeselect(selectionKey)
         } else {
+          if (selectedDocCount >= MAX_DINGTALK_DOC_CONTEXTS) {
+            setSelectionError(t('dingtalkDocs.maxSelected', { count: MAX_DINGTALK_DOC_CONTEXTS }))
+            return
+          }
           onSelect(buildDingTalkDocContext(node))
         }
       }
     },
-    [selectedContexts, onSelect, onDeselect, onSelectMultiple, onDeselectMultiple]
+    [
+      selectedContexts,
+      selectedDocCount,
+      onSelect,
+      onDeselect,
+      onSelectMultiple,
+      onDeselectMultiple,
+      t,
+    ]
   )
 
-  // Count of selected doc/file nodes across both sections
-  const selectedDocCount = useMemo(() => {
-    const countDocs = (nodeList: DingtalkDocNode[]): number => {
-      let count = 0
-      for (const node of nodeList) {
-        const selectionKey = getDingTalkSelectionKey(node.source, node.dingtalk_node_id)
-        if (node.node_type !== 'folder' && selectedContexts.has(selectionKey)) {
-          count++
+  const handleStartAuth = useCallback(async () => {
+    if (authPolling || authStartingRef.current) return
+    authStartingRef.current = true
+    setAuthError(null)
+    setAuthPolling(true)
+    try {
+      const result = await dingtalkDocApi.startDeviceLogin()
+      if (result.is_authenticated) {
+        await completeAuth()
+        return
+      }
+
+      const url = result.verification_url ?? null
+      const sessionId = result.session_id ?? null
+      if (!url || !sessionId) {
+        authStartingRef.current = false
+        setAuthError(t('dingtalkDocs.authFailed'))
+        setAuthPolling(false)
+        return
+      }
+
+      setVerificationUrl(url)
+      setUserCode(result.user_code ?? null)
+      setAuthSessionId(sessionId)
+
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      console.error('Failed to start DingTalk DWS device login:', err)
+      authStartingRef.current = false
+      setAuthError(t('dingtalkDocs.authFailed'))
+      setAuthPolling(false)
+    }
+  }, [authPolling, completeAuth, t])
+
+  useEffect(() => {
+    if (!authSessionId || !authPolling) return
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const poll = async () => {
+      try {
+        const result = await dingtalkDocApi.getDeviceLoginStatus(authSessionId)
+        if (cancelled) return
+
+        if (result.is_authenticated) {
+          await completeAuth()
+          return
         }
-        if (node.children) {
-          count += countDocs(node.children)
+
+        if (['error', 'timeout', 'cancelled'].includes(result.auth_status)) {
+          authStartingRef.current = false
+          setAuthError(
+            result.auth_status === 'timeout'
+              ? t('dingtalkDocs.authTimeout')
+              : result.error || t('dingtalkDocs.authFailed')
+          )
+          setAuthPolling(false)
+          return
+        }
+
+        timer = setTimeout(poll, 2000)
+      } catch (err) {
+        console.error('Failed to poll DingTalk DWS device login:', err)
+        if (!cancelled) {
+          authStartingRef.current = false
+          setAuthError(t('dingtalkDocs.authFailed'))
+          setAuthPolling(false)
         }
       }
-      return count
     }
-    return countDocs(nodes) + countDocs(wikispaceNodes)
-  }, [nodes, wikispaceNodes, selectedContexts])
+
+    timer = setTimeout(poll, 2000)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [authPolling, authSessionId, completeAuth, t])
 
   // Derived active section values
   const activeNodes = activeSection === 'my-docs' ? nodes : wikispaceNodes
@@ -477,18 +615,51 @@ export function DingTalkDocContextSelector({
       )
     }
 
-    if (activeSection === 'my-docs' && !isConfigured) {
+    if (!isAuthenticated) {
       return (
-        <div className="py-6 px-4 text-center space-y-3">
-          <p className="text-sm text-text-muted">{t('chat:dingtalkDocs.notConfigured')}</p>
-          <Link
-            href="/settings/integrations"
-            className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 font-medium transition-colors"
-            data-testid="dingtalk-go-to-configure"
+        <div className="py-5 px-5 text-center space-y-3" data-testid="dingtalk-auth-panel">
+          <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <KeyRound className="h-4 w-4" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-text-primary">{t('dingtalkDocs.authTitle')}</p>
+            <p className="text-xs leading-5 text-text-muted">{t('dingtalkDocs.authDescription')}</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleStartAuth}
+            disabled={authPolling}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+            data-testid="dingtalk-start-auth-button"
           >
-            {t('chat:dingtalkDocs.goToConfigure')}
+            {authPolling ? t('dingtalkDocs.authorizing') : t('dingtalkDocs.authorize')}
             <ExternalLink className="w-3.5 h-3.5" />
-          </Link>
+          </button>
+          {userCode && (
+            <div className="rounded-md border border-border bg-surface px-3 py-2 text-left">
+              <div className="text-xs text-text-muted">{t('dingtalkDocs.userCode')}</div>
+              <div className="mt-1 font-mono text-sm text-text-primary">{userCode}</div>
+            </div>
+          )}
+          {verificationUrl && (
+            <a
+              href={verificationUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              data-testid="dingtalk-auth-link"
+            >
+              {t('dingtalkDocs.openAuthLink')}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+          {authPolling && (
+            <p className="text-xs text-text-muted">{t('dingtalkDocs.waitingAuth')}</p>
+          )}
+          {authError && <p className="text-xs text-red-500">{authError}</p>}
+          {authStatus === 'error' && !authError && (
+            <p className="text-xs text-red-500">{t('dingtalkDocs.authFailed')}</p>
+          )}
         </div>
       )
     }
@@ -509,18 +680,18 @@ export function DingTalkDocContextSelector({
       )
     }
 
+    if (activeSection === 'my-docs' && !isConfigured) {
+      return (
+        <div className="py-6 px-4 text-center space-y-3">
+          <p className="text-sm text-text-muted">{t('dingtalkDocs.notAuthorized')}</p>
+        </div>
+      )
+    }
+
     if (activeSection === 'wikispace' && !wikispaceConfigured) {
       return (
         <div className="py-6 px-4 text-center space-y-3">
-          <p className="text-sm text-text-muted">{t('chat:dingtalkDocs.wikispaceNotConfigured')}</p>
-          <Link
-            href="/settings?section=integrations&tab=integrations"
-            className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 font-medium transition-colors"
-            data-testid="dingtalk-go-to-configure-wikispace"
-          >
-            {t('chat:dingtalkDocs.goToConfigure')}
-            <ExternalLink className="w-3.5 h-3.5" />
-          </Link>
+          <p className="text-sm text-text-muted">{t('dingtalkDocs.wikispaceNotAuthorized')}</p>
         </div>
       )
     }
@@ -528,7 +699,7 @@ export function DingTalkDocContextSelector({
     if (activeNodes.length === 0) {
       return (
         <div className="py-6 px-4 text-center space-y-3">
-          <p className="text-sm text-text-muted">{t('chat:dingtalkDocs.empty')}</p>
+          <p className="text-sm text-text-muted">{t('dingtalkDocs.empty')}</p>
           <button
             type="button"
             onClick={handleActiveSync}
@@ -537,7 +708,7 @@ export function DingTalkDocContextSelector({
             data-testid="dingtalk-empty-sync-button"
           >
             <RefreshCw className={cn('w-3.5 h-3.5', activeSyncing && 'animate-spin')} />
-            {activeSyncing ? t('chat:dingtalkDocs.syncing') : t('chat:dingtalkDocs.syncNow')}
+            {activeSyncing ? t('dingtalkDocs.syncing') : t('dingtalkDocs.syncNow')}
           </button>
         </div>
       )
@@ -570,7 +741,7 @@ export function DingTalkDocContextSelector({
           )}
           data-testid="dingtalk-section-my-docs"
         >
-          {t('chat:dingtalkDocs.myDocsTab')}
+          {t('dingtalkDocs.myDocsTab')}
         </button>
         <button
           type="button"
@@ -583,7 +754,7 @@ export function DingTalkDocContextSelector({
           )}
           data-testid="dingtalk-section-wikispace"
         >
-          {t('chat:dingtalkDocs.wikispaceTab')}
+          {t('dingtalkDocs.wikispaceTab')}
         </button>
       </div>
 
@@ -594,7 +765,7 @@ export function DingTalkDocContextSelector({
           type="text"
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
-          placeholder={t('chat:dingtalkDocs.searchPlaceholder')}
+          placeholder={t('dingtalkDocs.searchPlaceholder')}
           className="flex-1 text-sm bg-transparent outline-none text-text-primary placeholder:text-text-muted"
           data-testid="dingtalk-search-input"
         />
@@ -604,13 +775,13 @@ export function DingTalkDocContextSelector({
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
         <span className="text-xs text-text-muted">
           {activeLastSyncedAt
-            ? t('chat:dingtalkDocs.lastSynced', {
+            ? t('dingtalkDocs.lastSynced', {
                 time: new Date(activeLastSyncedAt).toLocaleString(),
               })
-            : t('chat:dingtalkDocs.neverSynced')}
+            : t('dingtalkDocs.neverSynced')}
           {selectedDocCount > 0 && (
             <span className="ml-2 text-primary font-medium">
-              {t('chat:dingtalkDocs.selectedCount', { count: selectedDocCount })}
+              {t('dingtalkDocs.selectedCount', { count: selectedDocCount })}
             </span>
           )}
         </span>
@@ -625,9 +796,15 @@ export function DingTalkDocContextSelector({
           data-testid="dingtalk-sync-button"
         >
           <RefreshCw className={cn('w-3 h-3', activeSyncing && 'animate-spin')} />
-          {activeSyncing ? t('chat:dingtalkDocs.syncing') : t('chat:dingtalkDocs.sync')}
+          {activeSyncing ? t('dingtalkDocs.syncing') : t('dingtalkDocs.sync')}
         </button>
       </div>
+
+      {selectionError && (
+        <div className="border-b border-border px-3 py-1.5 text-xs text-red-500">
+          {selectionError}
+        </div>
+      )}
 
       {/* Tree content area */}
       <div className="overflow-y-auto flex-1 max-h-[260px] py-1 px-1">{renderContent()}</div>

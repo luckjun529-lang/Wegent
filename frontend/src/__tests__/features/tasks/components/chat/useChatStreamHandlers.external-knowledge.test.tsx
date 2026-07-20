@@ -194,3 +194,56 @@ describe('useChatStreamHandlers external knowledge contexts', () => {
     expect(request).not.toHaveProperty('externalKnowledgeRefsReplace')
   })
 })
+
+describe('useChatStreamHandlers DingTalk document contexts', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it('sends dingtalk_doc references through contexts without prefixing the message', async () => {
+    const dingtalkCtx: ContextItem = {
+      type: 'dingtalk_doc',
+      id: 'docs:node-1',
+      name: 'Project Plan',
+      doc_url: 'https://alidocs.dingtalk.com/i/nodes/node-1',
+      node_type: 'doc',
+      dingtalk_node_id: 'node-1',
+      source: 'docs',
+    }
+
+    const { result } = renderSendHook([dingtalkCtx])
+
+    await act(async () => {
+      await result.current.handleSendMessage()
+    })
+
+    expect(mockContextSendMessage).toHaveBeenCalledTimes(1)
+    const request = mockContextSendMessage.mock.calls[0][0]
+
+    expect(request.message).toBe('find the spec')
+    expect(request.contexts).toEqual([
+      {
+        type: 'dingtalk_doc',
+        data: {
+          source: 'docs',
+          dingtalk_node_id: 'node-1',
+          doc_url: 'https://alidocs.dingtalk.com/i/nodes/node-1',
+          name: 'Project Plan',
+          node_type: 'doc',
+        },
+      },
+    ])
+
+    const options = mockContextSendMessage.mock.calls[0][1]
+    expect(options.pendingContexts).toEqual([
+      expect.objectContaining({
+        context_type: 'attachment',
+        name: 'Project Plan.md',
+        source: 'dingtalk_doc',
+        dingtalk_node_id: 'node-1',
+        doc_url: 'https://alidocs.dingtalk.com/i/nodes/node-1',
+        dingtalk_source: 'docs',
+      }),
+    ])
+  })
+})

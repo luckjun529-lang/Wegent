@@ -5,7 +5,7 @@
 """Tests for DingTalk document sync service."""
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -15,114 +15,104 @@ from app.models.user import User
 from app.services.dingtalk_doc_service import DingTalkDocService
 
 
-class TestGetUserDingtalkMcpUrl:
-    """Tests for get_user_dingtalk_mcp_url."""
+class TestLegacyMcpUrlAccessor:
+    """Tests for legacy MCP compatibility helpers."""
 
-    @patch("app.services.dingtalk_doc_service.UserMCPService")
-    def test_returns_url_when_enabled(self, mock_mcp_service: MagicMock) -> None:
-        """Returns decrypted URL when DingTalk Docs MCP is enabled."""
-        mock_mcp_service.get_provider_service_config.return_value = {
-            "enabled": True,
-            "url": "https://mcp.example.com/dingtalk",
-        }
-        mock_user = MagicMock()
-        mock_db = MagicMock()
-
-        result = DingTalkDocService.get_user_dingtalk_mcp_url(mock_user)
-
-        assert result == "https://mcp.example.com/dingtalk"
-        mock_mcp_service.get_provider_service_config.assert_called_once_with(
-            mock_user.preferences,
-            provider_id="dingtalk",
-            service_id="docs",
-        )
-
-    @patch("app.services.dingtalk_doc_service.UserMCPService")
-    def test_returns_none_when_disabled(self, mock_mcp_service: MagicMock) -> None:
-        """Returns None when DingTalk Docs MCP is disabled."""
-        mock_mcp_service.get_provider_service_config.return_value = {
-            "enabled": False,
-            "url": "https://mcp.example.com/dingtalk",
-        }
-        mock_user = MagicMock()
-        mock_db = MagicMock()
-
-        result = DingTalkDocService.get_user_dingtalk_mcp_url(mock_user)
-
-        assert result is None
-
-    @patch("app.services.dingtalk_doc_service.UserMCPService")
-    def test_returns_none_when_url_is_empty(self, mock_mcp_service: MagicMock) -> None:
-        """Returns None when URL is empty string."""
-        mock_mcp_service.get_provider_service_config.return_value = {
-            "enabled": True,
-            "url": "",
-        }
-        mock_user = MagicMock()
-        mock_db = MagicMock()
-
-        result = DingTalkDocService.get_user_dingtalk_mcp_url(mock_user)
-
-        assert result is None
-
-    @patch("app.services.dingtalk_doc_service.UserMCPService")
-    def test_returns_none_when_url_is_whitespace(
-        self, mock_mcp_service: MagicMock
-    ) -> None:
-        """Returns None when URL is only whitespace."""
-        mock_mcp_service.get_provider_service_config.return_value = {
-            "enabled": True,
-            "url": "   ",
-        }
-        mock_user = MagicMock()
-        mock_db = MagicMock()
-
-        result = DingTalkDocService.get_user_dingtalk_mcp_url(mock_user)
-
-        assert result is None
-
-    @patch("app.services.dingtalk_doc_service.UserMCPService")
-    def test_returns_none_when_config_missing(
-        self, mock_mcp_service: MagicMock
-    ) -> None:
-        """Returns None when no config is returned (no URL key)."""
-        mock_mcp_service.get_provider_service_config.return_value = {
-            "enabled": True,
-        }
-        mock_user = MagicMock()
-        mock_db = MagicMock()
-
-        result = DingTalkDocService.get_user_dingtalk_mcp_url(mock_user)
-
-        assert result is None
+    def test_get_user_dingtalk_mcp_url_returns_none(self) -> None:
+        """MCP URLs are no longer used by the DingTalk docs sync path."""
+        assert DingTalkDocService.get_user_dingtalk_mcp_url(MagicMock()) is None
 
 
 class TestIsConfigured:
     """Tests for is_configured."""
 
-    @patch.object(DingTalkDocService, "get_user_dingtalk_mcp_url")
-    def test_returns_true_when_url_configured(self, mock_get_url: MagicMock) -> None:
-        """Returns True when MCP URL is configured."""
-        mock_get_url.return_value = "https://mcp.example.com/dingtalk"
-        mock_user = MagicMock()
-        mock_db = MagicMock()
+    def test_returns_true_because_dws_is_backend_managed(self) -> None:
+        """Authorization is checked by DWS auth status at sync/read time."""
+        assert DingTalkDocService.is_configured(MagicMock()) is True
 
-        result = DingTalkDocService.is_configured(mock_user)
 
-        assert result is True
+class TestSyncDingtalkDocs:
+    """Tests for sync_dingtalk_docs."""
 
-    @patch.object(DingTalkDocService, "get_user_dingtalk_mcp_url")
-    def test_returns_false_when_url_not_configured(
-        self, mock_get_url: MagicMock
-    ) -> None:
-        """Returns False when MCP URL is not configured."""
-        mock_get_url.return_value = None
-        mock_user = MagicMock()
-        mock_db = MagicMock()
+    @pytest.mark.asyncio
+    async def test_raises_when_dws_is_not_authorized(self) -> None:
+        """Sync asks the user to authorize DingTalk before reading documents."""
+        user = MagicMock(id=123)
 
-        result = DingTalkDocService.is_configured(mock_user)
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.auth_status",
+            new=AsyncMock(
+                return_value={
+                    "is_authenticated": False,
+                    "auth_status": "unauthenticated",
+                }
+            ),
+        ):
+            with pytest.raises(ValueError, match="not authorized"):
+                await DingTalkDocService.sync_dingtalk_docs(user, MagicMock())
 
-        assert result is False
+    @pytest.mark.asyncio
+    async def test_syncs_my_wiki_space_nodes(self) -> None:
+        """Sync reads personal DingTalk spaces and persists fetched nodes."""
+        user = MagicMock(id=123)
+        db = MagicMock()
+        fetched_nodes = [{"nodeId": "doc-1", "nodeType": "doc"}]
+
+        with (
+            patch(
+                "app.services.dingtalk_doc_service.dingtalk_dws_service.auth_status",
+                new=AsyncMock(return_value={"is_authenticated": True}),
+            ) as mock_auth,
+            patch.object(
+                DingTalkDocService,
+                "_fetch_all_nodes",
+                new=AsyncMock(return_value=fetched_nodes),
+            ) as mock_fetch,
+            patch.object(
+                DingTalkDocService,
+                "_sync_nodes_to_db",
+                return_value={
+                    "added": 1,
+                    "updated": 0,
+                    "deleted": 0,
+                    "total": 1,
+                    "sync_time": datetime.now(),
+                },
+            ) as mock_sync,
+        ):
+            result = await DingTalkDocService.sync_dingtalk_docs(user, db)
+
+        mock_auth.assert_awaited_once_with(user.id)
+        mock_fetch.assert_awaited_once_with(user.id)
+        mock_sync.assert_called_once()
+        assert result["added"] == 1
+        assert result["mcp_nodes_fetched"] == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_nodes_lists_my_wiki_spaces(self) -> None:
+        """Personal documents are fetched from DWS myWikiSpace spaces."""
+        with (
+            patch(
+                "app.services.dingtalk_doc_service.dingtalk_dws_service.list_spaces",
+                new=AsyncMock(return_value=[{"workspaceId": "WS1"}]),
+            ) as mock_spaces,
+            patch.object(
+                DingTalkDocService,
+                "_list_nodes_recursive",
+                new=AsyncMock(),
+            ) as mock_recursive,
+        ):
+            result = await DingTalkDocService._fetch_all_nodes(user_id=7)
+
+        assert result == []
+        mock_spaces.assert_awaited_once_with(7, "myWikiSpace")
+        mock_recursive.assert_awaited_once_with(
+            user_id=7,
+            workspace_id="WS1",
+            folder_id=None,
+            all_nodes=[],
+            depth=0,
+        )
 
 
 class TestSyncNodesToDb:
@@ -646,194 +636,176 @@ class TestListNodesRecursive:
 
     @pytest.mark.asyncio
     async def test_recurses_into_folder_without_has_children_flag(self) -> None:
-        """Folders are recursed into even when hasChildren is absent or False.
-
-        This is the key regression test: previously the code required
-        node.get("hasChildren") to be truthy, which caused child nodes to be
-        missed when the DingTalk MCP API omitted or set hasChildren=False.
-        """
-        import json
-
-        call_log: list[str | None] = []
-
+        """Folders are recursed into even when hasChildren is absent."""
         root_folder_node = {
             "nodeId": "folder001",
             "name": "Root Folder",
             "nodeType": "folder",
-            # hasChildren intentionally omitted
         }
+        call_log: list[str | None] = []
 
-        async def mock_call_tool_with_data(tool_name: str, args: dict) -> MagicMock:
-            folder_id = args.get("folderId")
+        async def list_nodes(
+            user_id: int,
+            *,
+            workspace_id: str,
+            folder_id: str | None = None,
+            cursor: str | None = None,
+        ) -> tuple[list[dict], str | None]:
             call_log.append(folder_id)
-            result = MagicMock()
-            result.meta = None
             if folder_id is None:
-                # Root call: return a folder without hasChildren
-                content_item = MagicMock()
-                content_item.type = "text"
-                content_item.text = json.dumps([root_folder_node])
-                result.content = [content_item]
-            else:
-                # Folder call: return empty
-                result.content = []
-            return result
-
-        mock_session = MagicMock()
-        mock_session.call_tool = mock_call_tool_with_data
+                return [root_folder_node], None
+            return [], None
 
         all_nodes: list = []
-        await DingTalkDocService._list_nodes_recursive(
-            mock_session,
-            folder_id=None,
-            workspace_id=None,
-            all_nodes=all_nodes,
-            depth=0,
-        )
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.list_nodes",
+            new=AsyncMock(side_effect=list_nodes),
+        ):
+            await DingTalkDocService._list_nodes_recursive(
+                user_id=1,
+                workspace_id="WS1",
+                folder_id=None,
+                all_nodes=all_nodes,
+                depth=0,
+            )
 
-        # Should have called list_nodes for root AND for the folder
-        assert None in call_log, "Root call (folderId=None) should have been made"
-        assert (
-            "folder001" in call_log
-        ), "Folder 'folder001' should have been recursed into even without hasChildren flag"
+        assert call_log == [None, "folder001"]
         assert len(all_nodes) == 1
         assert all_nodes[0]["nodeId"] == "folder001"
+        assert all_nodes[0]["workspaceId"] == "WS1"
 
     @pytest.mark.asyncio
     async def test_recurses_into_folder_with_has_children_false(self) -> None:
         """Folders are recursed into even when hasChildren is explicitly False."""
-        import json
-
-        call_log: list[str | None] = []
-
         folder_node = {
             "nodeId": "folder002",
             "name": "Folder With False HasChildren",
             "nodeType": "folder",
-            "hasChildren": False,  # Explicitly False - old code would skip this
+            "hasChildren": False,
         }
+        call_log: list[str | None] = []
 
-        async def mock_call_tool(tool_name: str, args: dict) -> MagicMock:
-            folder_id = args.get("folderId")
+        async def list_nodes(
+            user_id: int,
+            *,
+            workspace_id: str,
+            folder_id: str | None = None,
+            cursor: str | None = None,
+        ) -> tuple[list[dict], str | None]:
             call_log.append(folder_id)
-            result = MagicMock()
-            result.meta = None
             if folder_id is None:
-                content_item = MagicMock()
-                content_item.type = "text"
-                content_item.text = json.dumps([folder_node])
-                result.content = [content_item]
-            else:
-                result.content = []
-            return result
-
-        mock_session = MagicMock()
-        mock_session.call_tool = mock_call_tool
+                return [folder_node], None
+            return [], None
 
         all_nodes: list = []
-        await DingTalkDocService._list_nodes_recursive(
-            mock_session,
-            folder_id=None,
-            workspace_id=None,
-            all_nodes=all_nodes,
-            depth=0,
-        )
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.list_nodes",
+            new=AsyncMock(side_effect=list_nodes),
+        ):
+            await DingTalkDocService._list_nodes_recursive(
+                user_id=1,
+                workspace_id="WS1",
+                folder_id=None,
+                all_nodes=all_nodes,
+                depth=0,
+            )
 
-        assert (
-            "folder002" in call_log
-        ), "Folder should be recursed into even when hasChildren=False"
+        assert call_log == [None, "folder002"]
 
     @pytest.mark.asyncio
     async def test_injects_parent_id_into_child_nodes(self) -> None:
         """Child nodes get parentId injected from the calling folder_id.
 
-        The DingTalk MCP list_nodes API does NOT return parent node information.
+        The DWS wiki node list API may not return parent node information.
         When we call list_nodes(folderId=X), the returned nodes are children of X,
         so we must inject parentId=X into each returned node to preserve the
         tree structure in the database.
         """
-        import json
-
         folder_id = "folder_parent_001"
         child_doc = {
             "nodeId": "doc_child_001",
             "name": "Child Document",
             "nodeType": "doc",
-            # No parentId in the MCP response
         }
 
-        async def mock_call_tool(tool_name: str, args: dict) -> MagicMock:
-            fid = args.get("folderId")
-            result = MagicMock()
-            result.meta = None
-            if fid == folder_id:
-                content_item = MagicMock()
-                content_item.type = "text"
-                content_item.text = json.dumps([child_doc])
-                result.content = [content_item]
-            else:
-                result.content = []
-            return result
-
-        mock_session = MagicMock()
-        mock_session.call_tool = mock_call_tool
-
         all_nodes: list = []
-        await DingTalkDocService._list_nodes_recursive(
-            mock_session,
-            folder_id=folder_id,
-            workspace_id=None,
-            all_nodes=all_nodes,
-            depth=0,
-        )
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.list_nodes",
+            new=AsyncMock(return_value=([child_doc], None)),
+        ):
+            await DingTalkDocService._list_nodes_recursive(
+                user_id=1,
+                workspace_id="WS1",
+                folder_id=folder_id,
+                all_nodes=all_nodes,
+                depth=0,
+            )
 
         assert len(all_nodes) == 1
         assert all_nodes[0]["nodeId"] == "doc_child_001"
+        assert all_nodes[0]["workspaceId"] == "WS1"
         assert all_nodes[0]["parentId"] == folder_id, (
             "parentId should be injected from the folder_id parameter "
-            "since DingTalk MCP does not return parent info"
+            "since DingTalk DWS may not return parent info"
         )
 
     @pytest.mark.asyncio
     async def test_root_nodes_have_no_parent_id_injected(self) -> None:
         """Root-level nodes (folder_id=None) do not get a parentId injected."""
-        import json
-
         root_doc = {
             "nodeId": "doc_root_001",
             "name": "Root Document",
             "nodeType": "doc",
         }
 
-        async def mock_call_tool(tool_name: str, args: dict) -> MagicMock:
-            result = MagicMock()
-            result.meta = None
-            if args.get("folderId") is None:
-                content_item = MagicMock()
-                content_item.type = "text"
-                content_item.text = json.dumps([root_doc])
-                result.content = [content_item]
-            else:
-                result.content = []
-            return result
-
-        mock_session = MagicMock()
-        mock_session.call_tool = mock_call_tool
-
         all_nodes: list = []
-        await DingTalkDocService._list_nodes_recursive(
-            mock_session,
-            folder_id=None,
-            workspace_id=None,
-            all_nodes=all_nodes,
-            depth=0,
-        )
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.list_nodes",
+            new=AsyncMock(return_value=([root_doc], None)),
+        ):
+            await DingTalkDocService._list_nodes_recursive(
+                user_id=1,
+                workspace_id="WS1",
+                folder_id=None,
+                all_nodes=all_nodes,
+                depth=0,
+            )
 
         assert len(all_nodes) == 1
-        # Root nodes should not have parentId injected (folder_id is None)
-        assert (
-            all_nodes[0].get("parentId") is None
-        ), "Root-level nodes should not have parentId injected"
+        assert all_nodes[0].get("parentId") is None
+
+    @pytest.mark.asyncio
+    async def test_continues_root_pagination(self) -> None:
+        """Root pagination continues until DWS stops returning a cursor."""
+        calls: list[str | None] = []
+
+        async def list_nodes(
+            user_id: int,
+            *,
+            workspace_id: str,
+            folder_id: str | None = None,
+            cursor: str | None = None,
+        ) -> tuple[list[dict], str | None]:
+            calls.append(cursor)
+            if cursor is None:
+                return [{"nodeId": "doc-1", "nodeType": "doc"}], "next"
+            return [{"nodeId": "doc-2", "nodeType": "doc"}], None
+
+        all_nodes: list = []
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.list_nodes",
+            new=AsyncMock(side_effect=list_nodes),
+        ):
+            await DingTalkDocService._list_nodes_recursive(
+                user_id=1,
+                workspace_id="WS1",
+                folder_id=None,
+                all_nodes=all_nodes,
+                depth=0,
+            )
+
+        assert calls == [None, "next"]
+        assert [node["nodeId"] for node in all_nodes] == ["doc-1", "doc-2"]
 
 
 class TestDeleteSyncedNode:

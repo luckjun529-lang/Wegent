@@ -185,6 +185,11 @@ RUN uv pip install --system --no-cache --no-deps openai-codex==0.1.0b3
 COPY backend/pyproject.toml /app/backend/pyproject.toml
 RUN cd /app/backend && uv pip install --system --no-cache -r pyproject.toml
 
+ARG DWS_CLI_VERSION=1.0.52
+RUN npm install -g dingtalk-workspace-cli@${DWS_CLI_VERSION} \
+ && dws --version \
+ && npm cache clean --force
+
 # Copy backend application code
 COPY backend/app /app/backend/app
 COPY backend/alembic /app/backend/alembic
@@ -216,6 +221,7 @@ ENV ENVIRONMENT=development
 ENV DATABASE_URL=sqlite:////app/data/wegent.db
 ENV CHAT_SHELL_MODE=package
 ENV CODEX_HOME=/app/data/codex
+ENV DWS_CONFIG_ROOT=/app/data/dws
 ENV PYTHONPATH=/app:/app/backend:/app/chat_shell
 ENV NODE_PATH=/usr/lib/node_modules
 ENV WEGENT_EXECUTOR_VERSION=${APP_VERSION}

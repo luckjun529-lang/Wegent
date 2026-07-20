@@ -767,11 +767,33 @@ class ChatNamespace(socketio.AsyncNamespace):
                 f"should_trigger_ai={should_trigger_ai}"
             )
 
+            from app.services.dingtalk_doc_materialization_service import (
+                dingtalk_doc_materialization_service,
+            )
+
+            attachment_ids_to_link = list(payload.attachment_ids or [])
+            if not attachment_ids_to_link and payload.attachment_id:
+                attachment_ids_to_link = [payload.attachment_id]
+
+            dingtalk_attachment_ids = (
+                await dingtalk_doc_materialization_service.materialize_contexts(
+                    db=db,
+                    user_id=user_id,
+                    contexts=payload.contexts,
+                )
+            )
+            attachment_ids_to_link.extend(dingtalk_attachment_ids)
+            contexts_to_link = (
+                dingtalk_doc_materialization_service.filter_non_dingtalk_contexts(
+                    payload.contexts
+                )
+            )
+
             # Process context metadata and RAG based on chat version
             # Uses service module for RAG processing
             _, rag_prompt = await process_context_and_rag(
                 message=effective_message,
-                contexts=payload.contexts,
+                contexts=contexts_to_link,
                 should_trigger_ai=should_trigger_ai,
                 user_id=user_id,
                 db=db,
@@ -919,14 +941,6 @@ class ChatNamespace(socketio.AsyncNamespace):
             if user_subtask_for_context:
                 from app.services.chat.preprocessing import link_contexts_to_subtask
 
-                # Build attachment_ids list (support both legacy and new format)
-                attachment_ids_to_link = []
-                if payload.attachment_ids:
-                    attachment_ids_to_link = payload.attachment_ids
-                elif payload.attachment_id:
-                    # Backward compatibility: convert single attachment_id to list
-                    attachment_ids_to_link = [payload.attachment_id]
-
                 linked_context_ids = link_contexts_to_subtask(
                     db=db,
                     subtask_id=user_subtask_for_context.id,
@@ -934,7 +948,7 @@ class ChatNamespace(socketio.AsyncNamespace):
                     attachment_ids=(
                         attachment_ids_to_link if attachment_ids_to_link else None
                     ),
-                    contexts=payload.contexts,
+                    contexts=contexts_to_link,
                     task=task,
                     user_name=user_name,
                 )

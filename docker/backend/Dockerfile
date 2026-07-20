@@ -4,6 +4,8 @@
 
 FROM ghcr.io/wecode-ai/wegent-base-python3.12:latest
 
+ARG DWS_CLI_VERSION=1.0.52
+
 # Set working directory
 WORKDIR /app
 
@@ -20,6 +22,17 @@ COPY knowledge_engine /app/knowledge_engine
 COPY backend/pyproject.toml /app/backend/pyproject.toml
 RUN cd /app/backend && uv pip install --system --no-cache -r pyproject.toml
 
+# dingtalk-workspace-cli extracts bundled skills with `unzip` during install.
+RUN dnf install -y unzip \
+ && dnf clean all
+
+# Install pinned DingTalk DWS CLI for backend-managed DingTalk auth/document reads.
+RUN npm install -g dingtalk-workspace-cli@${DWS_CLI_VERSION} \
+ && dws --version \
+ && npm cache clean --force
+
+RUN mkdir -p /app/data/dws && chmod 700 /app/data/dws
+
 # Copy application code
 COPY backend /app
 
@@ -34,6 +47,7 @@ COPY backend/init_data /app/init_data
 RUN if [ ! -f .env ]; then cp .env.example .env; fi
 
 ENV PORT=8000
+ENV DWS_CONFIG_ROOT=/app/data/dws
 # Default: 600 seconds (10 minutes) for long-running streaming requests to complete
 ENV GRACEFUL_SHUTDOWN_TIMEOUT=600
 # Expose port

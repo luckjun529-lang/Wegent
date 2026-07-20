@@ -58,7 +58,9 @@ class DingtalkSyncStatus(BaseModel):
 
     last_synced_at: Optional[datetime] = None
     total_nodes: int = 0
-    is_configured: bool = False  # Whether MCP URL is configured
+    is_configured: bool = False
+    is_authenticated: bool | None = None
+    auth_status: str | None = None
 
 
 class DingtalkSyncResult(BaseModel):
@@ -69,8 +71,8 @@ class DingtalkSyncResult(BaseModel):
     deleted: int = 0
     total: int = 0
     sync_time: datetime
-    # Number of nodes returned by the MCP server before DB filtering.
-    # Useful for diagnosing issues where the MCP returns data but nothing is
+    # Number of nodes returned by DWS before DB filtering.
+    # Useful for diagnosing issues where DWS returns data but nothing is
     # written (e.g. all nodes lack a nodeId).
     mcp_nodes_fetched: int = 0
 

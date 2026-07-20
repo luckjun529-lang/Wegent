@@ -487,12 +487,17 @@ export interface ChatMessageAttachment {
 
 export interface ChatMessageContext {
   id: number
-  context_type: 'attachment' | 'knowledge_base'
+  context_type: 'attachment' | 'knowledge_base' | 'table' | 'external_knowledge'
   name: string
   status: string
   file_extension?: string
   file_size?: number
   mime_type?: string
+  source?: string | null
+  dingtalk_node_id?: string | null
+  doc_url?: string | null
+  dingtalk_source?: string | null
+  read_at?: string | null
   document_count?: number
 }
 

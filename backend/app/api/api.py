@@ -11,6 +11,7 @@ from app.api.endpoints import (
     device_chat_tasks,
     devices,
     dingtalk_docs,
+    dingtalk_dws,
     groups,
     health,
     im_sessions,
@@ -223,6 +224,9 @@ api_router.include_router(share.router, prefix="/share", tags=["share"])
 api_router.include_router(tables.router, prefix="/tables", tags=["tables"])
 api_router.include_router(
     dingtalk_docs.router, prefix="/dingtalk-docs", tags=["dingtalk-docs"]
+)
+api_router.include_router(
+    dingtalk_dws.router, prefix="/dingtalk-dws", tags=["dingtalk-dws"]
 )
 api_router.include_router(
     dingtalk_wikispace_router,

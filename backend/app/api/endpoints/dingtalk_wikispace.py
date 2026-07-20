@@ -47,13 +47,7 @@ async def sync_wikispace_nodes(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DingtalkSyncResult:
-    """Trigger sync of DingTalk wikispace nodes from the user's wikispace MCP server."""
-    if not DingTalkWikiSpaceService.is_configured(current_user):
-        raise HTTPException(
-            status_code=400,
-            detail="DingTalk WikiSpace MCP is not configured. "
-            "Please enable it in Settings > Integrations first.",
-        )
+    """Trigger sync of DingTalk wikispace nodes from DWS."""
     try:
         result = await DingTalkWikiSpaceService.sync_wikispace_nodes(current_user, db)
         return DingtalkSyncResult(**result)

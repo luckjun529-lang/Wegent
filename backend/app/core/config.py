@@ -534,6 +534,13 @@ class Settings(BaseSettings):
     # Generate using: openssl rand -hex 16
     ATTACHMENT_AES_IV: str = "1234567890123456"
 
+    # DingTalk DWS CLI configuration
+    DWS_BIN: str = "dws"
+    DWS_CONFIG_ROOT: str = "/app/data/dws"
+    DWS_COMMAND_TIMEOUT_SECONDS: int = 60
+    DWS_DEVICE_LOGIN_TIMEOUT_SECONDS: int = 600
+    DINGTALK_DOC_MAX_REFERENCES: int = 10
+
     OTEL_ENABLED: bool = False
 
     # Logging configuration

@@ -102,6 +102,11 @@ class SubtaskContextBrief(BaseModel):
     file_extension: Optional[str] = None
     file_size: Optional[int] = None
     mime_type: Optional[str] = None
+    source: Optional[str] = None
+    dingtalk_node_id: Optional[str] = None
+    doc_url: Optional[str] = None
+    dingtalk_source: Optional[str] = None
+    read_at: Optional[str] = None
     # Knowledge base fields (from type_data)
     knowledge_id: Optional[int] = None
     document_count: Optional[int] = None

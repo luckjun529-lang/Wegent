@@ -19,6 +19,7 @@ This guide provides detailed instructions for configuring DingTalk IM channel in
 - [Step 6: Verify Connection](#-step-6-verify-connection)
 - [Step 7: Test the Integration](#-step-7-test-the-integration)
 - [DingTalk-Specific Features](#-dingtalk-specific-features)
+- [Reference DingTalk Documents in Chat](#-reference-dingtalk-documents-in-chat)
 - [Troubleshooting](#-troubleshooting)
 - [Related Resources](#-related-resources)
 
@@ -151,6 +152,33 @@ DingTalk AI Cards provide a rich streaming response experience:
 - Support Markdown formatting
 - Code block syntax highlighting
 - Collapsible long content
+
+---
+
+## 📎 Reference DingTalk Documents in Chat
+
+Wegent lets you reference DingTalk documents directly from the chat composer. The backend uses DWS to read your synced document tree, then materializes the selected documents as Markdown references before sending them to the model.
+
+### How to use
+
+1. Click the **DingTalk Docs** button in the chat composer
+2. If you are not authorized yet, Wegent opens the DingTalk device-code authorization page
+3. After you confirm, Wegent automatically syncs your **My Documents** and **Knowledge Base**
+4. Select the documents you want to reference from the tree
+5. Send the message and the referenced documents will be included in the conversation
+
+### Notes
+
+- Only documents synced into Wegent are available
+- Folders cannot be sent directly; selecting a folder selects its descendant documents
+- Each message can reference up to 10 DingTalk documents
+- Document content is converted into Markdown attachments on the server, so executors and sandboxes do not receive DingTalk credentials
+- If authorization expires, click **DingTalk Docs** again to re-authorize
+
+### Related Resources
+
+- [DingTalk Open Platform DWS Documentation](https://open.dingtalk.com/document/development/dingtalk-cli-performing-tasks-within)
+- [DWS GitHub](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli)
 
 ---
 

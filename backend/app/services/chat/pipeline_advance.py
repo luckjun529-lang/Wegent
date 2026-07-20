@@ -132,10 +132,15 @@ async def advance_pipeline_stage_and_send(
     )
     pipeline_bot_ids = [advance_result["next_stage_bot_id"]]
     previous_bot_id = advance_result.get("current_stage_bot_id")
+    attachment_ids_to_link, contexts_to_link = await _prepare_payload_contexts(
+        db=db,
+        user=user,
+        payload=payload,
+    )
 
     _, rag_prompt = await process_context_and_rag(
         message=handoff_message,
-        contexts=getattr(payload, "contexts", None),
+        contexts=contexts_to_link,
         should_trigger_ai=True,
         user_id=user.id,
         db=db,
@@ -179,12 +184,13 @@ async def advance_pipeline_stage_and_send(
         source="web",
     )
 
-    linked_context_ids = _link_payload_contexts(
+    linked_context_ids = await _link_payload_contexts(
         db=db,
         user=user,
         task=result.task,
         user_subtask=result.user_subtask,
-        payload=payload,
+        attachment_ids=attachment_ids_to_link,
+        contexts=contexts_to_link,
     )
     if linked_context_ids:
         logger.info(
@@ -276,22 +282,17 @@ def _generate_params_to_dict(generate_params: Any) -> Optional[dict[str, Any]]:
     }
 
 
-def _link_payload_contexts(
+async def _link_payload_contexts(
     *,
     db: Session,
     user: User,
     task: TaskResource,
     user_subtask: Subtask,
-    payload: Any,
+    attachment_ids: list[int],
+    contexts: Any,
 ) -> list[int]:
     from app.services.chat.preprocessing import link_contexts_to_subtask
 
-    attachment_ids = list(getattr(payload, "attachment_ids", None) or [])
-    attachment_id = getattr(payload, "attachment_id", None)
-    if not attachment_ids and attachment_id:
-        attachment_ids = [attachment_id]
-
-    contexts = getattr(payload, "contexts", None)
     if not attachment_ids and not contexts:
         return []
 
@@ -304,6 +305,39 @@ def _link_payload_contexts(
         task=task,
         user_name=user.user_name,
     )
+
+
+async def _prepare_payload_contexts(
+    *,
+    db: Session,
+    user: User,
+    payload: Any,
+) -> tuple[list[int], Any]:
+    from app.services.dingtalk_doc_materialization_service import (
+        dingtalk_doc_materialization_service,
+    )
+
+    attachment_ids = list(getattr(payload, "attachment_ids", None) or [])
+    attachment_id = getattr(payload, "attachment_id", None)
+    if not attachment_ids and attachment_id:
+        attachment_ids = [attachment_id]
+
+    contexts = getattr(payload, "contexts", None)
+    if not attachment_ids and not contexts:
+        return [], None
+
+    dingtalk_attachment_ids = (
+        await dingtalk_doc_materialization_service.materialize_contexts(
+            db=db,
+            user_id=user.id,
+            contexts=contexts,
+        )
+    )
+    attachment_ids.extend(dingtalk_attachment_ids)
+    contexts_to_link = (
+        dingtalk_doc_materialization_service.filter_non_dingtalk_contexts(contexts)
+    )
+    return attachment_ids, contexts_to_link
 
 
 async def _emit_task_status(task_id: int, status: str, progress: int) -> None:

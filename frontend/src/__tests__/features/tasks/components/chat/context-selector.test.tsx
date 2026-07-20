@@ -6,6 +6,7 @@ import '@testing-library/jest-dom'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import ContextSelector from '@/features/tasks/components/chat/ContextSelector'
+import { DingTalkDocContextSelector } from '@/features/tasks/components/chat/DingTalkDocContextSelector'
 import type { ContextItem } from '@/types/context'
 
 const mockListKnowledgeBases = jest.fn()
@@ -18,10 +19,16 @@ const mockGetDingTalkDocs = jest.fn()
 const mockGetDingTalkSyncStatus = jest.fn()
 const mockGetDingTalkWikispaceNodes = jest.fn()
 const mockGetDingTalkWikispaceSyncStatus = jest.fn()
+const mockGetDingTalkAuthStatus = jest.fn()
+const mockStartDingTalkDeviceLogin = jest.fn()
+const mockGetDingTalkDeviceLoginStatus = jest.fn()
+const mockSyncDingTalkDocs = jest.fn()
+const mockSyncDingTalkWikispaceNodes = jest.fn()
+const mockT = (key: string) => key
 
 jest.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: mockT,
   }),
 }))
 
@@ -58,12 +65,15 @@ jest.mock('@/apis/table', () => ({
 
 jest.mock('@/apis/dingtalk-doc', () => ({
   dingtalkDocApi: {
+    getAuthStatus: (...args: unknown[]) => mockGetDingTalkAuthStatus(...args),
+    startDeviceLogin: (...args: unknown[]) => mockStartDingTalkDeviceLogin(...args),
+    getDeviceLoginStatus: (...args: unknown[]) => mockGetDingTalkDeviceLoginStatus(...args),
     getDocs: (...args: unknown[]) => mockGetDingTalkDocs(...args),
     getSyncStatus: (...args: unknown[]) => mockGetDingTalkSyncStatus(...args),
     getWikispaceNodes: (...args: unknown[]) => mockGetDingTalkWikispaceNodes(...args),
     getWikispaceSyncStatus: (...args: unknown[]) => mockGetDingTalkWikispaceSyncStatus(...args),
-    syncDocs: jest.fn().mockResolvedValue({ added: 0, updated: 0, deleted: 0, total: 0 }),
-    syncWikispaceNodes: jest.fn().mockResolvedValue({ added: 0, updated: 0, deleted: 0, total: 0 }),
+    syncDocs: (...args: unknown[]) => mockSyncDingTalkDocs(...args),
+    syncWikispaceNodes: (...args: unknown[]) => mockSyncDingTalkWikispaceNodes(...args),
   },
 }))
 
@@ -172,6 +182,8 @@ function createAllGroupedResponse({
 
 describe('ContextSelector organization grouping', () => {
   beforeEach(() => {
+    jest.useRealTimers()
+    jest.clearAllMocks()
     mockListKnowledgeBases.mockResolvedValue({ items: [] })
     mockGetBoundKnowledgeBases.mockResolvedValue({ items: [] })
     mockGetAllGroupedKnowledgeBases.mockResolvedValue(
@@ -193,6 +205,24 @@ describe('ContextSelector organization grouping', () => {
     mockGetFolderTree.mockResolvedValue([])
     mockListDocuments.mockResolvedValue({ items: [] })
     mockGetDingTalkDocs.mockResolvedValue({ nodes: [], total_count: 0 })
+    mockGetDingTalkAuthStatus.mockResolvedValue({
+      is_authenticated: true,
+      auth_status: 'authenticated',
+    })
+    mockStartDingTalkDeviceLogin.mockResolvedValue({
+      is_authenticated: false,
+      auth_status: 'pending',
+      verification_url: 'https://login.dingtalk.com/oauth2/device/verify.htm?user_code=ABCD-EFGH',
+      user_code: 'ABCD-EFGH',
+      session_id: 'session-1',
+    })
+    mockGetDingTalkDeviceLoginStatus.mockResolvedValue({
+      is_authenticated: true,
+      auth_status: 'authenticated',
+      verification_url: 'https://login.dingtalk.com/oauth2/device/verify.htm?user_code=ABCD-EFGH',
+      user_code: 'ABCD-EFGH',
+      session_id: 'session-1',
+    })
     mockGetDingTalkSyncStatus.mockResolvedValue({
       is_configured: true,
       last_synced_at: null,
@@ -204,6 +234,18 @@ describe('ContextSelector organization grouping', () => {
       last_synced_at: null,
       total_nodes: 0,
     })
+    mockSyncDingTalkDocs.mockResolvedValue({ added: 0, updated: 0, deleted: 0, total: 0 })
+    mockSyncDingTalkWikispaceNodes.mockResolvedValue({
+      added: 0,
+      updated: 0,
+      deleted: 0,
+      total: 0,
+    })
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
+    jest.restoreAllMocks()
   })
 
   it('shows knowledge bases under the organization section when the organization namespace is dynamic', async () => {
@@ -1061,16 +1103,130 @@ describe('ContextSelector organization grouping', () => {
 
     fireEvent.click(screen.getByTestId('knowledge-picker-dingtalk-node-docs-folder-1'))
     expect(onSelectMultiple).toHaveBeenCalledWith([
-      expect.objectContaining({ id: 'docs:folder-1', type: 'dingtalk_doc' }),
       expect.objectContaining({ id: 'docs:file-1', type: 'dingtalk_doc' }),
     ])
 
     onSelectMultiple.mockClear()
     fireEvent.click(screen.getByTestId('knowledge-picker-dingtalk-all-docs'))
     expect(onSelectMultiple).toHaveBeenCalledWith([
-      expect.objectContaining({ id: 'docs:folder-1', type: 'dingtalk_doc' }),
       expect.objectContaining({ id: 'docs:file-1', type: 'dingtalk_doc' }),
     ])
+  })
+
+  it('shows a localized DingTalk auth panel and opens only one authorization tab', async () => {
+    mockGetDingTalkAuthStatus.mockResolvedValue({
+      is_authenticated: false,
+      auth_status: 'unauthenticated',
+    })
+    const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null)
+
+    const { unmount } = render(
+      <DingTalkDocContextSelector
+        selectedContexts={new Set()}
+        onSelect={jest.fn()}
+        onDeselect={jest.fn()}
+        onSelectMultiple={jest.fn()}
+        onDeselectMultiple={jest.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dingtalk-auth-panel')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('dingtalkDocs.authTitle')).toBeInTheDocument()
+    expect(screen.queryByText('chat:dingtalkDocs.notAuthorized')).not.toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dingtalk-start-auth-button'))
+      fireEvent.click(screen.getByTestId('dingtalk-start-auth-button'))
+    })
+
+    await waitFor(() => {
+      expect(mockStartDingTalkDeviceLogin).toHaveBeenCalledTimes(1)
+    })
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://login.dingtalk.com/oauth2/device/verify.htm?user_code=ABCD-EFGH',
+      '_blank',
+      'noopener,noreferrer'
+    )
+
+    unmount()
+    openSpy.mockRestore()
+  })
+
+  it('refreshes the DingTalk popover after device authorization succeeds', async () => {
+    jest.useFakeTimers()
+    mockGetDingTalkDocs.mockResolvedValue({
+      total_count: 1,
+      nodes: [
+        {
+          id: 2,
+          dingtalk_node_id: 'file-1',
+          name: '任务执行流程',
+          doc_url: 'https://alidocs.dingtalk.com/i/nodes/file-1',
+          parent_node_id: '',
+          node_type: 'file',
+          workspace_id: 'workspace-1',
+          content_type: 'ALIDOC',
+          source: 'docs',
+          is_active: true,
+          last_synced_at: '',
+          created_at: '',
+          updated_at: '',
+          children: [],
+        },
+      ],
+    })
+    mockGetDingTalkAuthStatus
+      .mockResolvedValueOnce({
+        is_authenticated: false,
+        auth_status: 'unauthenticated',
+      })
+      .mockResolvedValueOnce({
+        is_authenticated: false,
+        auth_status: 'unauthenticated',
+      })
+      .mockResolvedValue({
+        is_authenticated: true,
+        auth_status: 'authenticated',
+      })
+    const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null)
+
+    render(
+      <DingTalkDocContextSelector
+        selectedContexts={new Set()}
+        onSelect={jest.fn()}
+        onDeselect={jest.fn()}
+        onSelectMultiple={jest.fn()}
+        onDeselectMultiple={jest.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dingtalk-auth-panel')).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('dingtalk-start-auth-button'))
+    })
+
+    await act(async () => {
+      jest.advanceTimersByTime(2000)
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(mockGetDingTalkDeviceLoginStatus).toHaveBeenCalledWith('session-1')
+      expect(mockSyncDingTalkDocs).toHaveBeenCalled()
+      expect(mockSyncDingTalkWikispaceNodes).toHaveBeenCalled()
+      expect(screen.queryByTestId('dingtalk-auth-panel')).not.toBeInTheDocument()
+      expect(screen.getByTestId('dingtalk-ctx-node-docs-file-1')).toBeInTheDocument()
+    })
+
+    openSpy.mockRestore()
+    jest.useRealTimers()
   })
 
   it('renders DingTalk wikispace names in the second column, supports selecting a space, and opens children in the third column', async () => {
@@ -1140,7 +1296,6 @@ describe('ContextSelector organization grouping', () => {
 
     fireEvent.click(screen.getByTestId('knowledge-picker-dingtalk-space-space-1'))
     expect(onSelectMultiple).toHaveBeenCalledWith([
-      expect.objectContaining({ id: 'wikispace:space-1', type: 'dingtalk_doc' }),
       expect.objectContaining({ id: 'wikispace:wiki-file-1', type: 'dingtalk_doc' }),
     ])
 

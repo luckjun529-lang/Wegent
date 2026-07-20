@@ -138,9 +138,9 @@
       "syncSuccess": "同步完成",
       "syncFailed": "同步失败",
       "syncHint": "点击同步按钮从钉钉拉取文档列表",
-      "notConfigured": "未配置钉钉文档",
-      "configureHint": "请先在设置中启用并配置钉钉文档 MCP 服务，然后即可在此处浏览和同步钉钉文档。",
-      "goToSettings": "前往设置",
+      "notConfigured": "钉钉未授权或授权已过期",
+      "configureHint": "请先完成钉钉授权，然后即可在此处浏览和同步钉钉文档。",
+      "goToSettings": "前往授权",
       "emptyState": "暂无文档",
       "lastSynced": "上次同步",
       "docCount": "{{count}} 个文档",
@@ -158,8 +158,8 @@
       "wikispace": "知识库",
       "wikispaceSyncHint": "点击同步按钮从钉钉拉取知识库",
       "wikispaceEmpty": "暂无知识库内容",
-      "wikispaceNotConfigured": "钉钉知识库 MCP 未配置",
-      "wikispaceConfigureHint": "请前往设置配置钉钉知识库 MCP"
+      "wikispaceNotConfigured": "钉钉未授权或授权已过期",
+      "wikispaceConfigureHint": "请先完成钉钉授权，然后即可同步钉钉知识库"
     },
     "groupFilter": {
       "all": "全部分组"
