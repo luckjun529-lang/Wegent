@@ -18,13 +18,9 @@ from sqlalchemy.orm import Session
 
 from app.models.dingtalk_doc import DingTalkNodeSource, DingtalkSyncedNode
 from app.models.user import User
-from app.services.dingtalk_dws_service import dingtalk_dws_service
+from app.services.dingtalk_dws_service import DwsCommandError, dingtalk_dws_service
 
 logger = logging.getLogger(__name__)
-
-# Legacy MCP tool names kept for older tests/imports. DWS is the active sync path.
-MCP_TOOL_LIST_NODES = "list_nodes"
-MCP_TOOL_SEARCH_DOCUMENTS = "search_documents"
 
 # Maximum recursion depth for folder traversal
 MAX_RECURSION_DEPTH = 10
@@ -39,16 +35,6 @@ class DingTalkDocService:
     """Service for syncing and querying DingTalk document nodes."""
 
     @staticmethod
-    def get_user_dingtalk_mcp_url(user: User) -> str | None:
-        """Legacy MCP URL accessor kept for compatibility with old callers."""
-        return None
-
-    @staticmethod
-    def is_configured(user: User) -> bool:
-        """DWS is backend-managed; authorization is checked by DWS auth status."""
-        return True
-
-    @staticmethod
     async def sync_dingtalk_docs(user: User, db: Session) -> dict[str, Any]:
         """Sync DingTalk document nodes from DWS.
 
@@ -58,7 +44,9 @@ class DingTalkDocService:
         if not auth_status.get("is_authenticated"):
             raise ValueError("DingTalk is not authorized or authorization has expired")
 
-        all_nodes = await DingTalkDocService._fetch_all_nodes(user.id)
+        all_nodes, traversal_complete = await DingTalkDocService._fetch_all_nodes(
+            user.id
+        )
         original_count = len(all_nodes)
 
         if len(all_nodes) > MAX_NODES_PER_SYNC:
@@ -73,30 +61,46 @@ class DingTalkDocService:
         # Sync to database - use local time (no timezone) consistent with created_at
         now = datetime.now()
         stats = DingTalkDocService._sync_nodes_to_db(
-            user.id, all_nodes, now, db, source=DOCS_SOURCE
+            user.id,
+            all_nodes,
+            now,
+            db,
+            source=DOCS_SOURCE,
+            deactivate_missing=traversal_complete
+            and original_count <= MAX_NODES_PER_SYNC,
         )
-        stats["mcp_nodes_fetched"] = original_count
+        stats["dws_nodes_fetched"] = original_count
+        stats["truncated"] = (
+            not traversal_complete or original_count > MAX_NODES_PER_SYNC
+        )
 
         return stats
 
     @staticmethod
-    async def _fetch_all_nodes(user_id: int) -> list[dict[str, Any]]:
+    async def _fetch_all_nodes(
+        user_id: int,
+    ) -> tuple[list[dict[str, Any]], bool]:
         """Fetch all personal-document nodes from DWS myWikiSpace."""
         all_nodes: list[dict[str, Any]] = []
+        traversal_complete = True
         spaces = await dingtalk_dws_service.list_spaces(user_id, "myWikiSpace")
         for space in spaces:
+            if len(all_nodes) >= MAX_NODES_PER_SYNC + 1:
+                traversal_complete = False
+                break
             workspace_id = DingTalkDocService._extract_workspace_id(space)
             if not workspace_id:
                 logger.warning("Skipping DingTalk personal space without workspace id")
                 continue
-            await DingTalkDocService._list_nodes_recursive(
+            space_complete = await DingTalkDocService._list_nodes_recursive(
                 user_id=user_id,
                 workspace_id=workspace_id,
                 folder_id=None,
                 all_nodes=all_nodes,
                 depth=0,
             )
-        return all_nodes
+            traversal_complete = traversal_complete and space_complete
+        return DingTalkDocService._dedupe_nodes_by_id(all_nodes), traversal_complete
 
     @staticmethod
     async def _list_nodes_recursive(
@@ -105,7 +109,8 @@ class DingTalkDocService:
         folder_id: str | None,
         all_nodes: list[dict[str, Any]],
         depth: int,
-    ) -> None:
+        visited_folders: set[tuple[str, str]] | None = None,
+    ) -> bool:
         """Recursively list DWS wiki nodes under a workspace/folder."""
         if depth >= MAX_RECURSION_DEPTH:
             logger.warning(
@@ -113,9 +118,24 @@ class DingTalkDocService:
                 depth,
                 folder_id,
             )
-            return
+            return False
+
+        fetch_limit = MAX_NODES_PER_SYNC + 1
+        if len(all_nodes) >= fetch_limit:
+            return False
+
+        if visited_folders is None:
+            visited_folders = set()
+        if folder_id is not None:
+            folder_key = (workspace_id, folder_id)
+            if folder_key in visited_folders:
+                logger.warning("Skipping repeated DingTalk folder %s", folder_id)
+                return True
+            visited_folders.add(folder_key)
 
         cursor = None
+        seen_cursors: set[str] = set()
+        traversal_complete = True
         while True:
             nodes_data, cursor = await dingtalk_dws_service.list_nodes(
                 user_id,
@@ -124,6 +144,8 @@ class DingTalkDocService:
                 cursor=cursor,
             )
 
+            remaining = fetch_limit - len(all_nodes)
+            nodes_data = nodes_data[:remaining]
             for node in nodes_data:
                 if folder_id and not node.get("parentId"):
                     node["parentId"] = folder_id
@@ -137,16 +159,31 @@ class DingTalkDocService:
                     node_id = DingTalkDocService._extract_node_id(node)
                     if not node_id:
                         continue
-                    await DingTalkDocService._list_nodes_recursive(
+                    child_complete = await DingTalkDocService._list_nodes_recursive(
                         user_id=user_id,
                         workspace_id=workspace_id,
                         folder_id=node_id,
                         all_nodes=all_nodes,
                         depth=depth + 1,
+                        visited_folders=visited_folders,
                     )
+                    traversal_complete = traversal_complete and child_complete
+                    if len(all_nodes) >= fetch_limit:
+                        return False
 
             if not cursor:
                 break
+
+            if cursor in seen_cursors:
+                raise DwsCommandError(
+                    f"DWS returned a repeated pagination cursor for workspace {workspace_id}"
+                )
+            seen_cursors.add(cursor)
+
+            if len(all_nodes) >= fetch_limit:
+                return False
+
+        return traversal_complete
 
     @staticmethod
     def _extract_workspace_id(data: dict[str, Any]) -> str:
@@ -164,6 +201,8 @@ class DingTalkDocService:
         return str(
             data.get("nodeId")
             or data.get("node_id")
+            or data.get("fileId")
+            or data.get("file_id")
             or data.get("dentryUuid")
             or data.get("dingtalk_node_id")
             or data.get("id")
@@ -172,93 +211,45 @@ class DingTalkDocService:
 
     @staticmethod
     def _extract_node_type(data: dict[str, Any]) -> str:
-        return str(data.get("nodeType") or data.get("node_type") or "doc")
+        if data.get("isFolder") is True or data.get("is_folder") is True:
+            return "folder"
 
-    # Known list keys in DingTalk list_nodes/list_wikiSpaces responses.
-    # Add new keys only after validating them against real MCP payloads.
-    _NODE_LIST_KEYS = (
-        "items",
-        "nodes",
-        "wikiSpaces",
-        "spaces",
-        "spaceList",
-    )
+        raw_type = str(
+            data.get("nodeType")
+            or data.get("node_type")
+            or data.get("dentryType")
+            or data.get("dentry_type")
+            or data.get("type")
+            or "doc"
+        ).lower()
+        if raw_type in {"folder", "directory", "dir", "1"}:
+            return "folder"
+        if raw_type in {"file", "0"}:
+            return "file"
+        return "doc"
 
     @staticmethod
-    def _parse_list_nodes_result(
-        result: Any,
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        """Parse the result from MCP list_nodes tool call.
+    def _dedupe_nodes_by_id(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """De-duplicate nodes while keeping the most complete payload."""
 
-        The MCP tool returns content items that contain the node list data.
-        Handles various response envelope shapes used by different DingTalk
-        MCP servers (docs MCP vs wikiSpace/knowledge-base MCP).
+        def completeness(node: dict[str, Any]) -> int:
+            return sum(
+                1 for value in node.values() if value is not None and value != ""
+            )
 
-        Returns a tuple of (nodes, next_page_token).
-        """
-        import json
-
-        nodes: list[dict[str, Any]] = []
-        next_page_token: str | None = None
-
-        if not hasattr(result, "content") or not result.content:
-            logger.debug("list_nodes result has no content attribute or empty content")
-            return nodes, next_page_token
-
-        for content_item in result.content:
-            # Text content contains JSON data
-            if hasattr(content_item, "type") and content_item.type == "text":
-                raw_text = getattr(content_item, "text", "") or ""
-                try:
-                    data = json.loads(raw_text)
-                except (json.JSONDecodeError, TypeError):
-                    logger.debug(
-                        "Failed to parse list_nodes result content as JSON. "
-                        "Raw text (first 500 chars): %.500s",
-                        raw_text,
-                    )
-                    continue
-
-                if isinstance(data, list):
-                    # Direct list of node objects
-                    nodes.extend(item for item in data if isinstance(item, dict))
-                elif isinstance(data, dict):
-                    # Wrapped response envelope — try known list keys
-                    found_list: list[dict[str, Any]] | None = None
-                    for key in DingTalkDocService._NODE_LIST_KEYS:
-                        candidate = data.get(key)
-                        if isinstance(candidate, list):
-                            found_list = [
-                                item for item in candidate if isinstance(item, dict)
-                            ]
-                            break
-
-                    if found_list is not None:
-                        nodes.extend(found_list)
-                    else:
-                        # Log keys so we can diagnose unknown envelope shapes
-                        logger.debug(
-                            "list_nodes response dict has no recognised list key. "
-                            "Available keys: %s",
-                            list(data.keys()),
-                        )
-
-                    # Extract pagination token (several possible key names)
-                    token = (
-                        data.get("nextPageToken")
-                        or data.get("next_page_token")
-                        or data.get("pageToken")
-                        or data.get("cursor")
-                    )
-                    if token and isinstance(token, str):
-                        next_page_token = token
-                else:
-                    logger.debug(
-                        "list_nodes response content is neither list nor dict: %s",
-                        type(data).__name__,
-                    )
-
-        return nodes, next_page_token
+        seen: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for node in nodes:
+            node_id = DingTalkDocService._extract_node_id(node)
+            if not node_id:
+                continue
+            if node_id not in seen:
+                seen[node_id] = node
+                order.append(node_id)
+                continue
+            if completeness(node) > completeness(seen[node_id]):
+                seen[node_id] = node
+        return [seen[node_id] for node_id in order]
 
     @staticmethod
     def _normalize_source(source: DingTalkNodeSource | str) -> str:
@@ -278,6 +269,8 @@ class DingTalkDocService:
         sync_time: datetime,
         db: Session,
         source: DingTalkNodeSource = DOCS_SOURCE,
+        *,
+        deactivate_missing: bool = True,
     ) -> dict[str, Any]:
         """Sync fetched nodes to the database.
 
@@ -288,6 +281,8 @@ class DingTalkDocService:
         added = 0
         updated = 0
         deleted = 0
+
+        nodes = DingTalkDocService._dedupe_nodes_by_id(nodes)
 
         # Build a map of current DingTalk node IDs
         dingtalk_node_ids = set()
@@ -308,11 +303,12 @@ class DingTalkDocService:
             .all()
         )
 
-        for existing in existing_active:
-            if existing.dingtalk_node_id not in dingtalk_node_ids:
-                existing.is_active = False
-                existing.updated_at = sync_time
-                deleted += 1
+        if deactivate_missing:
+            for existing in existing_active:
+                if existing.dingtalk_node_id not in dingtalk_node_ids:
+                    existing.is_active = False
+                    existing.updated_at = sync_time
+                    deleted += 1
 
         # Collect all non-empty node IDs for a single batch lookup (avoids N+1 queries)
         node_ids = [
@@ -339,7 +335,13 @@ class DingTalkDocService:
             if not node_id:
                 continue
 
-            name = node_data.get("name", node_data.get("title", "Untitled"))
+            name = (
+                node_data.get("name")
+                or node_data.get("fileName")
+                or node_data.get("file_name")
+                or node_data.get("title")
+                or "Untitled"
+            )
             node_type_raw = DingTalkDocService._extract_node_type(node_data)
 
             # Map node type
@@ -366,10 +368,17 @@ class DingTalkDocService:
                 node_data.get("workspaceId") or node_data.get("workspace_id") or ""
             )
             content_type = (
-                node_data.get("contentType") or node_data.get("content_type") or ""
+                node_data.get("contentType")
+                or node_data.get("content_type")
+                or node_data.get("extension")
+                or node_data.get("fileExtension")
+                or ""
             )
             content_updated_at = DingTalkDocService._parse_update_time(
-                node_data.get("updateTime") or node_data.get("updated_at"),
+                node_data.get("updateTime")
+                or node_data.get("modifyTime")
+                or node_data.get("modifiedTime")
+                or node_data.get("updated_at"),
                 sync_time,
             )
 
@@ -503,9 +512,9 @@ class DingTalkDocService:
         )
 
     @staticmethod
-    def get_sync_status(user: User, db: Session) -> dict[str, Any]:
+    async def get_sync_status(user: User, db: Session) -> dict[str, Any]:
         """Get sync status for a user's DingTalk documents."""
-        is_configured = DingTalkDocService.is_configured(user)
+        auth_status = await dingtalk_dws_service.auth_status(user.id)
 
         last_synced = (
             db.query(DingtalkSyncedNode.last_synced_at)
@@ -531,7 +540,9 @@ class DingTalkDocService:
         return {
             "last_synced_at": last_synced[0] if last_synced else None,
             "total_nodes": total,
-            "is_configured": is_configured,
+            "is_configured": auth_status["is_authenticated"],
+            "is_authenticated": auth_status["is_authenticated"],
+            "auth_status": auth_status["auth_status"],
         }
 
     @staticmethod

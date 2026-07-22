@@ -625,6 +625,7 @@ class ChatNamespace(socketio.AsyncNamespace):
         db = SessionLocal()
         pipeline_info = None
         pipeline_context_passing = None
+        dingtalk_attachment_ids: list[int] = []
         try:
             # Get user
             user = db.query(User).filter(User.id == user_id).first()
@@ -1108,6 +1109,16 @@ class ChatNamespace(socketio.AsyncNamespace):
             }
 
         except Exception as e:
+            if dingtalk_attachment_ids:
+                from app.services.dingtalk_doc_materialization_service import (
+                    dingtalk_doc_materialization_service,
+                )
+
+                dingtalk_doc_materialization_service.delete_unlinked_attachments(
+                    db,
+                    user_id,
+                    dingtalk_attachment_ids,
+                )
             logger.exception(f"[WS] chat:send exception: {e}")
             error_response = {"error": str(e)}
             logger.info(f"[WS] chat:send returning error response: {error_response}")

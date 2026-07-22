@@ -64,12 +64,12 @@ async def sync_dingtalk_docs(
 
 
 @router.get("/sync-status", response_model=DingtalkSyncStatus)
-def get_sync_status(
+async def get_sync_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DingtalkSyncStatus:
     """Get the sync status for the current user's DingTalk documents."""
-    status = DingTalkDocService.get_sync_status(current_user, db)
+    status = await DingTalkDocService.get_sync_status(current_user, db)
     return DingtalkSyncStatus(**status)
 
 

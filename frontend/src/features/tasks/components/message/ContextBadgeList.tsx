@@ -10,6 +10,7 @@ import AttachmentPreview from '../input/AttachmentPreview'
 import type { SubtaskContextBrief, Attachment } from '@/types/api'
 import { useTranslation } from '@/hooks/useTranslation'
 import { formatDocumentCount } from '@/lib/i18n-helpers'
+import { getSafeHttpUrl } from '@/utils/safe-url'
 
 /**
  * Base preview component for context items (attachments, knowledge bases, etc.)
@@ -226,15 +227,18 @@ function DingTalkDocBadge({ context }: { context: SubtaskContextBrief }) {
   const sourceLabel =
     context.dingtalk_source === 'wikispace'
       ? t('dingtalkDocs.wikispaceTab')
-      : t('dingtalkDocs.myDocsTab')
+      : context.dingtalk_source === 'team_files'
+        ? t('dingtalkDocs.teamFilesTab')
+        : t('dingtalkDocs.myDocsTab')
   const subtitle = `${t('dingtalkDocs.docBadgeHint')} · ${sourceLabel}`
-  const isClickable = !!context.doc_url
+  const safeDocUrl = getSafeHttpUrl(context.doc_url)
+  const isClickable = !!safeDocUrl
 
   const openDoc = () => {
-    if (!context.doc_url) {
+    if (!safeDocUrl) {
       return
     }
-    window.open(context.doc_url, '_blank', 'noopener,noreferrer')
+    window.open(safeDocUrl, '_blank', 'noopener,noreferrer')
   }
 
   const handleClick = (e: React.MouseEvent) => {
@@ -259,7 +263,7 @@ function DingTalkDocBadge({ context }: { context: SubtaskContextBrief }) {
       onKeyDown={isClickable ? handleKeyDown : undefined}
       role={isClickable ? 'button' : undefined}
       tabIndex={isClickable ? 0 : undefined}
-      title={isClickable ? (context.doc_url ?? undefined) : undefined}
+      title={safeDocUrl ?? undefined}
       data-testid="message-context-dingtalk-doc"
     >
       <FileText className="h-5 w-5 flex-shrink-0 text-orange-600" />

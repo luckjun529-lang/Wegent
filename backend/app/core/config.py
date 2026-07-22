@@ -536,7 +536,7 @@ class Settings(BaseSettings):
 
     # DingTalk DWS CLI configuration
     DWS_BIN: str = "dws"
-    DWS_CONFIG_ROOT: str = "/app/data/dws"
+    DWS_CONFIG_ROOT: str = str(Path(__file__).resolve().parents[2] / "data" / "dws")
     DWS_COMMAND_TIMEOUT_SECONDS: int = 60
     DWS_DEVICE_LOGIN_TIMEOUT_SECONDS: int = 600
     DINGTALK_DOC_MAX_REFERENCES: int = 10

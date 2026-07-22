@@ -674,7 +674,7 @@ export interface SubtaskContextBrief {
   source?: string | null
   dingtalk_node_id?: string | null
   doc_url?: string | null
-  dingtalk_source?: 'docs' | 'wikispace' | string | null
+  dingtalk_source?: 'docs' | 'wikispace' | 'team_files' | string | null
   read_at?: string | null
   // Knowledge base fields (from type_data)
   knowledge_id?: number | null

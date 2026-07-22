@@ -10,25 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.dingtalk_doc import DingtalkSyncedNode
+from app.models.dingtalk_doc import DingTalkNodeSource, DingtalkSyncedNode
 from app.models.user import User
 from app.services.dingtalk_doc_service import DingTalkDocService
-
-
-class TestLegacyMcpUrlAccessor:
-    """Tests for legacy MCP compatibility helpers."""
-
-    def test_get_user_dingtalk_mcp_url_returns_none(self) -> None:
-        """MCP URLs are no longer used by the DingTalk docs sync path."""
-        assert DingTalkDocService.get_user_dingtalk_mcp_url(MagicMock()) is None
-
-
-class TestIsConfigured:
-    """Tests for is_configured."""
-
-    def test_returns_true_because_dws_is_backend_managed(self) -> None:
-        """Authorization is checked by DWS auth status at sync/read time."""
-        assert DingTalkDocService.is_configured(MagicMock()) is True
 
 
 class TestSyncDingtalkDocs:
@@ -66,7 +50,7 @@ class TestSyncDingtalkDocs:
             patch.object(
                 DingTalkDocService,
                 "_fetch_all_nodes",
-                new=AsyncMock(return_value=fetched_nodes),
+                new=AsyncMock(return_value=(fetched_nodes, True)),
             ) as mock_fetch,
             patch.object(
                 DingTalkDocService,
@@ -86,7 +70,7 @@ class TestSyncDingtalkDocs:
         mock_fetch.assert_awaited_once_with(user.id)
         mock_sync.assert_called_once()
         assert result["added"] == 1
-        assert result["mcp_nodes_fetched"] == 1
+        assert result["dws_nodes_fetched"] == 1
 
     @pytest.mark.asyncio
     async def test_fetch_all_nodes_lists_my_wiki_spaces(self) -> None:
@@ -99,12 +83,12 @@ class TestSyncDingtalkDocs:
             patch.object(
                 DingTalkDocService,
                 "_list_nodes_recursive",
-                new=AsyncMock(),
+                new=AsyncMock(return_value=True),
             ) as mock_recursive,
         ):
             result = await DingTalkDocService._fetch_all_nodes(user_id=7)
 
-        assert result == []
+        assert result == ([], True)
         mock_spaces.assert_awaited_once_with(7, "myWikiSpace")
         mock_recursive.assert_awaited_once_with(
             user_id=7,
@@ -269,6 +253,42 @@ class TestSyncNodesToDb:
         # Verify node2 is now inactive
         test_db.refresh(node2)
         assert node2.is_active is False
+
+    def test_keeps_missing_nodes_active_when_sync_is_truncated(
+        self, test_db: Session, test_user: User
+    ) -> None:
+        """A bounded partial traversal must not invalidate unseen cached nodes."""
+        now = datetime.now()
+        existing = DingtalkSyncedNode(
+            user_id=test_user.id,
+            dingtalk_node_id="cached-team-file",
+            name="Cached Team File",
+            doc_url="https://alidocs.dingtalk.com/i/nodes/cached-team-file",
+            parent_node_id="",
+            node_type="file",
+            workspace_id="1001",
+            content_type="pdf",
+            content_updated_at=now,
+            source=DingTalkNodeSource.TEAM_FILES.value,
+            is_active=True,
+            last_synced_at=now,
+        )
+        test_db.add(existing)
+        test_db.commit()
+
+        result = DingTalkDocService._sync_nodes_to_db(
+            test_user.id,
+            [],
+            datetime.now(),
+            test_db,
+            source=DingTalkNodeSource.TEAM_FILES,
+            deactivate_missing=False,
+        )
+
+        test_db.refresh(existing)
+        assert existing.is_active is True
+        assert result["deleted"] == 0
+        assert result["total"] == 1
 
     def test_reactivates_inactive_node(self, test_db: Session, test_user: User) -> None:
         """Previously inactive nodes are reactivated when they reappear in sync."""
@@ -550,9 +570,9 @@ class TestGetDingtalkDocs:
 class TestGetSyncStatus:
     """Tests for get_sync_status."""
 
-    @patch.object(DingTalkDocService, "is_configured", return_value=True)
-    def test_returns_status_when_configured(
-        self, mock_is_configured: MagicMock, test_db: Session, test_user: User
+    @pytest.mark.asyncio
+    async def test_returns_status_when_configured(
+        self, test_db: Session, test_user: User
     ) -> None:
         """Returns correct status when DingTalk is configured with synced nodes."""
         now = datetime.now(timezone.utc)
@@ -569,37 +589,67 @@ class TestGetSyncStatus:
         test_db.add(node)
         test_db.commit()
 
-        status = DingTalkDocService.get_sync_status(test_user, test_db)
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.auth_status",
+            new=AsyncMock(
+                return_value={
+                    "is_authenticated": True,
+                    "auth_status": "authenticated",
+                }
+            ),
+        ):
+            status = await DingTalkDocService.get_sync_status(test_user, test_db)
 
         assert status["is_configured"] is True
+        assert status["auth_status"] == "authenticated"
         assert status["total_nodes"] == 1
         assert status["last_synced_at"] is not None
 
-    @patch.object(DingTalkDocService, "is_configured", return_value=False)
-    def test_returns_not_configured_when_no_mcp(
-        self, mock_is_configured: MagicMock, test_db: Session, test_user: User
+    @pytest.mark.asyncio
+    async def test_returns_not_configured_when_unauthorized(
+        self, test_db: Session, test_user: User
     ) -> None:
-        """Returns is_configured=False when MCP URL is not set."""
-        status = DingTalkDocService.get_sync_status(test_user, test_db)
+        """Returns an unauthenticated status before DWS device login."""
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.auth_status",
+            new=AsyncMock(
+                return_value={
+                    "is_authenticated": False,
+                    "auth_status": "unauthenticated",
+                }
+            ),
+        ):
+            status = await DingTalkDocService.get_sync_status(test_user, test_db)
 
         assert status["is_configured"] is False
+        assert status["is_authenticated"] is False
+        assert status["auth_status"] == "unauthenticated"
         assert status["total_nodes"] == 0
         assert status["last_synced_at"] is None
 
-    @patch.object(DingTalkDocService, "is_configured", return_value=True)
-    def test_returns_zero_nodes_when_no_syncs(
-        self, mock_is_configured: MagicMock, test_db: Session, test_user: User
+    @pytest.mark.asyncio
+    async def test_returns_zero_nodes_when_no_syncs(
+        self, test_db: Session, test_user: User
     ) -> None:
-        """Returns total_nodes=0 when user has configured but never synced."""
-        status = DingTalkDocService.get_sync_status(test_user, test_db)
+        """Returns total_nodes=0 when authorized but never synced."""
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.auth_status",
+            new=AsyncMock(
+                return_value={
+                    "is_authenticated": True,
+                    "auth_status": "authenticated",
+                }
+            ),
+        ):
+            status = await DingTalkDocService.get_sync_status(test_user, test_db)
 
         assert status["is_configured"] is True
         assert status["total_nodes"] == 0
         assert status["last_synced_at"] is None
 
-    @patch.object(DingTalkDocService, "is_configured", return_value=True)
-    def test_excludes_inactive_nodes_from_count(
-        self, mock_is_configured: MagicMock, test_db: Session, test_user: User
+    @pytest.mark.asyncio
+    async def test_excludes_inactive_nodes_from_count(
+        self, test_db: Session, test_user: User
     ) -> None:
         """Inactive nodes are not counted in total_nodes."""
         now = datetime.now(timezone.utc)
@@ -626,7 +676,16 @@ class TestGetSyncStatus:
         test_db.add_all([active, inactive])
         test_db.commit()
 
-        status = DingTalkDocService.get_sync_status(test_user, test_db)
+        with patch(
+            "app.services.dingtalk_doc_service.dingtalk_dws_service.auth_status",
+            new=AsyncMock(
+                return_value={
+                    "is_authenticated": True,
+                    "auth_status": "authenticated",
+                }
+            ),
+        ):
+            status = await DingTalkDocService.get_sync_status(test_user, test_db)
 
         assert status["total_nodes"] == 1
 

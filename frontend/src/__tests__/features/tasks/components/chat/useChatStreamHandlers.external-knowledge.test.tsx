@@ -246,4 +246,61 @@ describe('useChatStreamHandlers DingTalk document contexts', () => {
       }),
     ])
   })
+
+  it('keeps the original pending filename and type for downloadable files', async () => {
+    const teamFileContext: ContextItem = {
+      type: 'dingtalk_doc',
+      id: 'team_files:node-2',
+      name: 'Team Report.pdf',
+      doc_url: 'https://alidocs.dingtalk.com/i/nodes/node-2',
+      node_type: 'file',
+      dingtalk_node_id: 'node-2',
+      content_type: 'pdf',
+      source: 'team_files',
+    }
+    const { result } = renderSendHook([teamFileContext])
+
+    await act(async () => {
+      await result.current.handleSendMessage()
+    })
+
+    const request = mockContextSendMessage.mock.calls[0][0]
+    expect(request.contexts[0].data.source).toBe('team_files')
+    const options = mockContextSendMessage.mock.calls[0][1]
+    expect(options.pendingContexts).toEqual([
+      expect.objectContaining({
+        name: 'Team Report.pdf',
+        dingtalk_source: 'team_files',
+      }),
+    ])
+    expect(options.pendingContexts[0].file_extension).toBe('.pdf')
+    expect(options.pendingContexts[0].mime_type).toBe('application/pdf')
+  })
+
+  it('shows team online documents as Markdown while they are materializing', async () => {
+    const teamDocContext: ContextItem = {
+      type: 'dingtalk_doc',
+      id: 'team_files:node-3',
+      name: 'Architecture.pdf',
+      doc_url: 'https://alidocs.dingtalk.com/i/nodes/node-3',
+      node_type: 'file',
+      dingtalk_node_id: 'node-3',
+      content_type: 'ALIDOC',
+      source: 'team_files',
+    }
+    const { result } = renderSendHook([teamDocContext])
+
+    await act(async () => {
+      await result.current.handleSendMessage()
+    })
+
+    const options = mockContextSendMessage.mock.calls[0][1]
+    expect(options.pendingContexts).toEqual([
+      expect.objectContaining({
+        name: 'Architecture.pdf.md',
+        file_extension: '.md',
+        mime_type: 'text/markdown',
+      }),
+    ])
+  })
 })

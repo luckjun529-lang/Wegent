@@ -157,22 +157,30 @@ DingTalk AI Cards provide a rich streaming response experience:
 
 ## 📎 Reference DingTalk Documents in Chat
 
-Wegent lets you reference DingTalk documents directly from the chat composer. The backend uses DWS to read your synced document tree, then materializes the selected documents as Markdown references before sending them to the model.
+Wegent lets you reference DingTalk documents directly from the chat composer. The backend uses DWS to read your synced document tree, then either reads online content or downloads the original file according to its document type and sends it to the model as a chat attachment.
 
 ### How to use
 
 1. Click the **DingTalk Docs** button in the chat composer
 2. If you are not authorized yet, Wegent opens the DingTalk device-code authorization page
-3. After you confirm, Wegent automatically syncs your **My Documents** and **Knowledge Base**
+3. After you confirm, Wegent automatically syncs your **My Documents**, **Team Files**, and **Knowledge Base**
 4. Select the documents you want to reference from the tree
 5. Send the message and the referenced documents will be included in the conversation
 
 ### Notes
 
 - Only documents synced into Wegent are available
+- Team Files are synced from the DingTalk enterprise drive spaces and folders accessible to the current user
 - Folders cannot be sent directly; selecting a folder selects its descendant documents
 - Each message can reference up to 10 DingTalk documents
-- Document content is converted into Markdown attachments on the server, so executors and sandboxes do not receive DingTalk credentials
+- DingTalk documents, online spreadsheets, AI tables, and uploaded PDF, Word (docx), PowerPoint (pptx), Excel (xlsx), CSV, TXT, and Markdown files are supported
+- DingTalk documents, online spreadsheets, and AI tables are converted into Markdown attachments; uploaded files retain their original format and use Wegent's attachment parser
+- Each online spreadsheet reference reads the first 50 worksheets and up to 200,000 characters per worksheet; truncated results include an explicit notice
+- Each AI table reference reads the first 50 data tables and up to 100,000 records per table; truncated results include an explicit notice
+- Uploaded files are subject to the backend attachment size and extracted-content limits
+- DWS credentials remain in the Backend and are never passed to executors or sandboxes
+- Container deployments must place `DWS_CONFIG_ROOT` on persistent storage; Docker Compose uses `/app/data/dws` by default
+- Device authorization session state is process-local; the current image runs one Backend worker, and horizontally scaled deployments need instance affinity during authorization polling
 - If authorization expires, click **DingTalk Docs** again to re-authorize
 
 ### Related Resources

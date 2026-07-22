@@ -7,7 +7,7 @@
  *
  * Renders the synced DingTalk document tree with checkboxes.
  * Selecting a folder automatically selects all its descendant nodes.
- * Supports two sections: "My Documents" and "Knowledge Base".
+ * Supports My Documents, Team Files, and Knowledge Base sections.
  */
 
 'use client'
@@ -29,40 +29,19 @@ import {
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
 import { dingtalkDocApi } from '@/apis/dingtalk-doc'
-import type { DingtalkDocNode, DingtalkNodeSource } from '@/types/dingtalk-doc'
-import type { DingTalkDocContext, ContextItem } from '@/types/context'
-
-const MAX_DINGTALK_DOC_CONTEXTS = 10
-
-/** Collect all selectable descendant selection keys from a node. */
-export function collectDescendants(node: DingtalkDocNode): string[] {
-  const ids: string[] =
-    node.node_type === 'folder' ? [] : [getDingTalkSelectionKey(node.source, node.dingtalk_node_id)]
-  if (node.children) {
-    for (const child of node.children) {
-      ids.push(...collectDescendants(child))
-    }
-  }
-  return ids
-}
-
-/** Build a stable selection key for a DingTalk node. */
-export function getDingTalkSelectionKey(source: DingtalkNodeSource, nodeId: string): string {
-  return `${source}:${nodeId}`
-}
-
-/** Check if all nodes under a tree node are selected. */
-export function isNodeFullySelected(node: DingtalkDocNode, selected: Set<string>): boolean {
-  const allIds = collectDescendants(node)
-  return allIds.length > 0 && allIds.every(id => selected.has(id))
-}
-
-/** Check if some (but not all) nodes under a tree node are selected. */
-export function isNodePartiallySelected(node: DingtalkDocNode, selected: Set<string>): boolean {
-  const allIds = collectDescendants(node)
-  const selectedCount = allIds.filter(id => selected.has(id)).length
-  return selectedCount > 0 && selectedCount < allIds.length
-}
+import { getSafeHttpUrl } from '@/utils/safe-url'
+import type { DingtalkDocNode } from '@/types/dingtalk-doc'
+import type { DingTalkDocContext } from '@/types/context'
+import {
+  buildDingTalkDocContext,
+  collectDescendants,
+  filterDingTalkNodes,
+  getDingTalkSelectionKey,
+  isNodeFullySelected,
+  isNodePartiallySelected,
+  MAX_DINGTALK_DOC_CONTEXTS,
+} from './dingtalk-context-utils'
+import { useDingTalkDocTrees } from './useDingTalkDocTrees'
 
 interface TreeNodeItemProps {
   node: DingtalkDocNode
@@ -88,6 +67,7 @@ export function DingtalkContextTreeNode({
     : selectedIds.has(selectionKey)
   const isPartial = isFolder ? isNodePartiallySelected(node, selectedIds) : false
   const hasChildren = isFolder && node.children && node.children.length > 0
+  const safeDocUrl = getSafeHttpUrl(node.doc_url)
 
   // Auto-expand when searching
   useEffect(() => {
@@ -106,25 +86,6 @@ export function DingtalkContextTreeNode({
     },
     [node, onToggle]
   )
-
-  // Filter by search query
-  const normalizedQuery = searchQuery.toLowerCase()
-  const matchesSearch = !searchQuery || node.name.toLowerCase().includes(normalizedQuery)
-  const hasDescendantMatch = (descendant: DingtalkDocNode): boolean => {
-    if (descendant.name.toLowerCase().includes(normalizedQuery)) return true
-    return descendant.children ? descendant.children.some(hasDescendantMatch) : false
-  }
-  const childrenMatchSearch = searchQuery && node.children?.some(hasDescendantMatch)
-
-  if (!matchesSearch && !childrenMatchSearch && !isFolder) return null
-  if (!matchesSearch && !childrenMatchSearch && isFolder) {
-    // Still render folder if it has matching children
-    const hasMatchingChildren = node.children?.some(child => {
-      const allNames = [child.name, ...(child.children?.map(c => c.name) ?? [])]
-      return allNames.some(n => n.toLowerCase().includes(searchQuery.toLowerCase()))
-    })
-    if (!hasMatchingChildren && searchQuery) return null
-  }
 
   return (
     <div>
@@ -195,9 +156,9 @@ export function DingtalkContextTreeNode({
         </span>
 
         {/* External link for docs (visible on hover) */}
-        {!isFolder && node.doc_url && (
+        {!isFolder && safeDocUrl && (
           <a
-            href={node.doc_url}
+            href={safeDocUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -237,176 +198,10 @@ interface DingTalkDocContextSelectorProps {
   onDeselectMultiple: (ids: string[]) => void
 }
 
-export function useDingTalkDocTrees({ enabled = true }: { enabled?: boolean } = {}) {
-  const { t } = useTranslation('chat')
-
-  const [nodes, setNodes] = useState<DingtalkDocNode[]>([])
-  const [totalCount, setTotalCount] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [isConfigured, setIsConfigured] = useState(true)
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [authStatus, setAuthStatus] = useState<string>('unauthenticated')
-
-  const [wikispaceNodes, setWikispaceNodes] = useState<DingtalkDocNode[]>([])
-  const [wikispaceTotalCount, setWikispaceTotalCount] = useState(0)
-  const [wikispaceLoading, setWikispaceLoading] = useState(true)
-  const [wikispaceSyncing, setWikispaceSyncing] = useState(false)
-  const [wikispaceError, setWikispaceError] = useState<string | null>(null)
-  const [wikispaceConfigured, setWikispaceConfigured] = useState(false)
-  const [wikispaceLastSyncedAt, setWikispaceLastSyncedAt] = useState<string | null>(null)
-
-  const refreshAuthStatus = useCallback(async () => {
-    const status = await dingtalkDocApi.getAuthStatus()
-    setIsAuthenticated(status.is_authenticated)
-    setAuthStatus(status.auth_status)
-    return status
-  }, [])
-
-  const fetchDocs = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const auth = await refreshAuthStatus()
-      if (!auth.is_authenticated) {
-        setNodes([])
-        setTotalCount(0)
-        setIsConfigured(false)
-        setLastSyncedAt(null)
-        return
-      }
-      const [tree, status] = await Promise.all([
-        dingtalkDocApi.getDocs(),
-        dingtalkDocApi.getSyncStatus(),
-      ])
-      setNodes(tree.nodes)
-      setTotalCount(tree.total_count)
-      setIsConfigured(status.is_configured)
-      setLastSyncedAt(status.last_synced_at)
-    } catch (err) {
-      console.error('Failed to fetch DingTalk docs:', err)
-      setError(t('dingtalkDocs.loadFailed'))
-    } finally {
-      setLoading(false)
-    }
-  }, [refreshAuthStatus, t])
-
-  const fetchWikispace = useCallback(async () => {
-    setWikispaceLoading(true)
-    setWikispaceError(null)
-    try {
-      const auth = await refreshAuthStatus()
-      if (!auth.is_authenticated) {
-        setWikispaceNodes([])
-        setWikispaceTotalCount(0)
-        setWikispaceConfigured(false)
-        setWikispaceLastSyncedAt(null)
-        return
-      }
-      const [tree, status] = await Promise.all([
-        dingtalkDocApi.getWikispaceNodes(),
-        dingtalkDocApi.getWikispaceSyncStatus(),
-      ])
-      setWikispaceNodes(tree.nodes)
-      setWikispaceTotalCount(tree.total_count)
-      setWikispaceConfigured(status.is_configured)
-      setWikispaceLastSyncedAt(status.last_synced_at)
-    } catch (err) {
-      console.error('Failed to sync DingTalk wikispace:', err)
-      setWikispaceError(t('dingtalkDocs.loadFailed'))
-    } finally {
-      setWikispaceLoading(false)
-    }
-  }, [refreshAuthStatus, t])
-
-  useEffect(() => {
-    if (!enabled) return
-    fetchDocs()
-    fetchWikispace()
-  }, [enabled, fetchDocs, fetchWikispace])
-
-  const syncDocs = useCallback(async () => {
-    setSyncing(true)
-    setError(null)
-    try {
-      await dingtalkDocApi.syncDocs()
-      await fetchDocs()
-    } catch (err) {
-      console.error('Failed to sync DingTalk docs:', err)
-      setError(t('dingtalkDocs.syncFailed'))
-    } finally {
-      setSyncing(false)
-    }
-  }, [fetchDocs, t])
-
-  const syncWikispace = useCallback(async () => {
-    setWikispaceSyncing(true)
-    setWikispaceError(null)
-    try {
-      await dingtalkDocApi.syncWikispaceNodes()
-      await fetchWikispace()
-    } catch (err) {
-      console.error('Failed to sync DingTalk wikispace:', err)
-      setWikispaceError(t('dingtalkDocs.syncFailed'))
-    } finally {
-      setWikispaceSyncing(false)
-    }
-  }, [fetchWikispace, t])
-
-  const syncAllAfterAuth = useCallback(async () => {
-    setIsAuthenticated(true)
-    setAuthStatus('authenticated')
-    setIsConfigured(true)
-    setWikispaceConfigured(true)
-    setError(null)
-    setWikispaceError(null)
-    await Promise.allSettled([syncDocs(), syncWikispace()])
-  }, [syncDocs, syncWikispace])
-
-  return {
-    nodes,
-    totalCount,
-    loading,
-    syncing,
-    error,
-    isConfigured,
-    isAuthenticated,
-    authStatus,
-    lastSyncedAt,
-    refreshAuthStatus,
-    fetchDocs,
-    syncDocs,
-    wikispaceNodes,
-    wikispaceTotalCount,
-    wikispaceLoading,
-    wikispaceSyncing,
-    wikispaceError,
-    wikispaceConfigured,
-    wikispaceLastSyncedAt,
-    fetchWikispace,
-    syncWikispace,
-    syncAllAfterAuth,
-  }
-}
-
-export function buildDingTalkDocContext(node: DingtalkDocNode): DingTalkDocContext {
-  return {
-    id: getDingTalkSelectionKey(node.source, node.dingtalk_node_id),
-    name: node.name,
-    type: 'dingtalk_doc',
-    doc_url: node.doc_url,
-    node_type: node.node_type as 'folder' | 'doc' | 'file',
-    dingtalk_node_id: node.dingtalk_node_id,
-    source: node.source,
-  }
-}
-
 /**
  * DingTalk document context selector panel.
  * Displays the synced document tree with checkboxes for multi-selection.
- * Supports two sections: My Documents and Knowledge Base.
+ * Supports My Documents, Team Files, and Knowledge Base.
  */
 export function DingTalkDocContextSelector({
   selectedContexts,
@@ -416,7 +211,9 @@ export function DingTalkDocContextSelector({
   onDeselectMultiple,
 }: DingTalkDocContextSelectorProps) {
   const { t } = useTranslation('chat')
-  const [activeSection, setActiveSection] = useState<'my-docs' | 'wikispace'>('my-docs')
+  const [activeSection, setActiveSection] = useState<'my-docs' | 'team-files' | 'wikispace'>(
+    'my-docs'
+  )
   const [searchQuery, setSearchQuery] = useState('')
   const [selectionError, setSelectionError] = useState<string | null>(null)
   const [authSessionId, setAuthSessionId] = useState<string | null>(null)
@@ -444,6 +241,14 @@ export function DingTalkDocContextSelector({
     wikispaceLastSyncedAt,
     fetchWikispace,
     syncWikispace,
+    teamFileNodes,
+    teamFileLoading,
+    teamFileSyncing,
+    teamFileError,
+    teamFileConfigured,
+    teamFileLastSyncedAt,
+    fetchTeamFiles,
+    syncTeamFiles,
     syncAllAfterAuth,
   } = useDingTalkDocTrees()
 
@@ -529,7 +334,7 @@ export function DingTalkDocContextSelector({
         return
       }
 
-      const url = result.verification_url ?? null
+      const url = getSafeHttpUrl(result.verification_url)
       const sessionId = result.session_id ?? null
       if (!url || !sessionId) {
         authStartingRef.current = false
@@ -596,14 +401,52 @@ export function DingTalkDocContextSelector({
     }
   }, [authPolling, authSessionId, completeAuth, t])
 
-  // Derived active section values
-  const activeNodes = activeSection === 'my-docs' ? nodes : wikispaceNodes
-  const activeLoading = activeSection === 'my-docs' ? loading : wikispaceLoading
-  const activeSyncing = activeSection === 'my-docs' ? syncing : wikispaceSyncing
-  const activeError = activeSection === 'my-docs' ? error : wikispaceError
-  const activeLastSyncedAt = activeSection === 'my-docs' ? lastSyncedAt : wikispaceLastSyncedAt
-  const handleActiveSync = activeSection === 'my-docs' ? syncDocs : syncWikispace
-  const handleRetry = activeSection === 'my-docs' ? fetchDocs : fetchWikispace
+  const activeSectionState = {
+    'my-docs': {
+      nodes,
+      loading,
+      syncing,
+      error,
+      configured: isConfigured,
+      lastSyncedAt,
+      sync: syncDocs,
+      retry: fetchDocs,
+      notAuthorizedLabel: t('dingtalkDocs.notAuthorized'),
+    },
+    'team-files': {
+      nodes: teamFileNodes,
+      loading: teamFileLoading,
+      syncing: teamFileSyncing,
+      error: teamFileError,
+      configured: teamFileConfigured,
+      lastSyncedAt: teamFileLastSyncedAt,
+      sync: syncTeamFiles,
+      retry: fetchTeamFiles,
+      notAuthorizedLabel: t('dingtalkDocs.teamFilesNotAuthorized'),
+    },
+    wikispace: {
+      nodes: wikispaceNodes,
+      loading: wikispaceLoading,
+      syncing: wikispaceSyncing,
+      error: wikispaceError,
+      configured: wikispaceConfigured,
+      lastSyncedAt: wikispaceLastSyncedAt,
+      sync: syncWikispace,
+      retry: fetchWikispace,
+      notAuthorizedLabel: t('dingtalkDocs.wikispaceNotAuthorized'),
+    },
+  }[activeSection]
+  const activeNodes = activeSectionState.nodes
+  const visibleActiveNodes = useMemo(
+    () => filterDingTalkNodes(activeNodes, searchQuery),
+    [activeNodes, searchQuery]
+  )
+  const activeLoading = activeSectionState.loading
+  const activeSyncing = activeSectionState.syncing
+  const activeError = activeSectionState.error
+  const activeLastSyncedAt = activeSectionState.lastSyncedAt
+  const handleActiveSync = activeSectionState.sync
+  const handleRetry = activeSectionState.retry
 
   /** Render the content area for the active section. */
   const renderContent = () => {
@@ -680,18 +523,10 @@ export function DingTalkDocContextSelector({
       )
     }
 
-    if (activeSection === 'my-docs' && !isConfigured) {
+    if (!activeSectionState.configured) {
       return (
         <div className="py-6 px-4 text-center space-y-3">
-          <p className="text-sm text-text-muted">{t('dingtalkDocs.notAuthorized')}</p>
-        </div>
-      )
-    }
-
-    if (activeSection === 'wikispace' && !wikispaceConfigured) {
-      return (
-        <div className="py-6 px-4 text-center space-y-3">
-          <p className="text-sm text-text-muted">{t('dingtalkDocs.wikispaceNotAuthorized')}</p>
+          <p className="text-sm text-text-muted">{activeSectionState.notAuthorizedLabel}</p>
         </div>
       )
     }
@@ -714,7 +549,7 @@ export function DingTalkDocContextSelector({
       )
     }
 
-    return activeNodes.map(node => (
+    return visibleActiveNodes.map(node => (
       <DingtalkContextTreeNode
         key={getDingTalkSelectionKey(node.source, node.dingtalk_node_id)}
         node={node}
@@ -742,6 +577,19 @@ export function DingTalkDocContextSelector({
           data-testid="dingtalk-section-my-docs"
         >
           {t('dingtalkDocs.myDocsTab')}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSection('team-files')}
+          className={cn(
+            'flex-1 py-1.5 text-xs font-medium transition-colors',
+            activeSection === 'team-files'
+              ? 'text-text-primary border-b-2 border-primary'
+              : 'text-text-muted hover:text-text-primary'
+          )}
+          data-testid="dingtalk-section-team-files"
+        >
+          {t('dingtalkDocs.teamFilesTab')}
         </button>
         <button
           type="button"
@@ -809,22 +657,5 @@ export function DingTalkDocContextSelector({
       {/* Tree content area */}
       <div className="overflow-y-auto flex-1 max-h-[260px] py-1 px-1">{renderContent()}</div>
     </div>
-  )
-}
-
-/**
- * Collect all DingTalk selection keys from selected contexts.
- * Used by ContextSelector to bridge the generic ContextItem type to the
- * Set<string> format required by DingTalkDocContextSelector.
- */
-export function getDingTalkSelectedIds(selectedContexts: ContextItem[]): Set<string> {
-  return new Set(
-    selectedContexts
-      .filter((ctx): ctx is DingTalkDocContext => ctx.type === 'dingtalk_doc')
-      .map(ctx => {
-        const source: DingtalkNodeSource =
-          ctx.source === 'wikispace' || ctx.source === 'docs' ? ctx.source : 'docs'
-        return getDingTalkSelectionKey(source, ctx.dingtalk_node_id)
-      })
   )
 }

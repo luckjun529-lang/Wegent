@@ -51,17 +51,60 @@ function getDingTalkMarkdownName(name: string): string {
   return name.toLowerCase().endsWith('.md') ? name : `${name}.md`
 }
 
+const DINGTALK_DOWNLOADABLE_EXTENSIONS = new Set([
+  'pdf',
+  'docx',
+  'pptx',
+  'xlsx',
+  'csv',
+  'txt',
+  'md',
+])
+
+const DINGTALK_MIME_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv',
+  txt: 'text/plain',
+  md: 'text/markdown',
+}
+
+function getDingTalkFileExtension(context: DingTalkDocContext): string | null {
+  const contentType = (context.content_type ?? '').toLowerCase().split('/').pop() ?? ''
+  const nameExtension = context.name.toLowerCase().split('.').pop() ?? ''
+  if (['alidoc', 'adoc', 'axls', 'able'].includes(contentType)) {
+    return null
+  }
+  if (DINGTALK_DOWNLOADABLE_EXTENSIONS.has(contentType)) {
+    return contentType
+  }
+  return DINGTALK_DOWNLOADABLE_EXTENSIONS.has(nameExtension) ? nameExtension : null
+}
+
+function getPendingDingTalkName(context: DingTalkDocContext): string {
+  const extension = getDingTalkFileExtension(context)
+  if (!extension) {
+    return getDingTalkMarkdownName(context.name)
+  }
+  return context.name.toLowerCase().endsWith(`.${extension}`)
+    ? context.name
+    : `${context.name}.${extension}`
+}
+
 function buildPendingDingTalkContext(
   context: DingTalkDocContext,
   index: number
 ): SubtaskContextBrief {
+  const extension = getDingTalkFileExtension(context)
   return {
     id: -(index + 1),
     context_type: 'attachment',
-    name: getDingTalkMarkdownName(context.name),
+    name: getPendingDingTalkName(context),
     status: 'ready',
-    file_extension: '.md',
-    mime_type: 'text/markdown',
+    file_extension: extension ? `.${extension}` : '.md',
+    mime_type: extension ? DINGTALK_MIME_TYPES[extension] : 'text/markdown',
     source: 'dingtalk_doc',
     dingtalk_node_id: context.dingtalk_node_id,
     doc_url: context.doc_url,
@@ -755,7 +798,6 @@ export function useChatStreamHandlers({
       taskType,
       selectedDocumentIds,
       knowledgeBaseId,
-      t,
       selectedTeam?.id,
       currentTaskId,
       selectedTaskDetail,
@@ -1490,7 +1532,6 @@ export function useChatStreamHandlers({
       showRepositorySelector,
       selectedRepo,
       selectedBranch,
-      selectedContexts,
       taskType,
       knowledgeBaseId,
       markTaskAsViewed,

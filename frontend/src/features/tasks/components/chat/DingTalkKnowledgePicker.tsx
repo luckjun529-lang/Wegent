@@ -5,7 +5,15 @@
 'use client'
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Check, ChevronRight, Database, FileText, Folder, FolderOpen } from 'lucide-react'
+import {
+  Check,
+  ChevronRight,
+  Database,
+  FileText,
+  Folder,
+  FolderOpen,
+  HardDrive,
+} from 'lucide-react'
 
 import type { DingtalkDocNode } from '@/types/dingtalk-doc'
 import type { ContextItem, DingTalkDocContext } from '@/types/context'
@@ -14,32 +22,16 @@ import { useTranslation } from '@/hooks/useTranslation'
 import {
   buildDingTalkDocContext,
   collectDescendants,
+  dingTalkNodeMatchesSearch,
+  filterDingTalkNodes,
   getDingTalkSelectedIds,
   getDingTalkSelectionKey,
   isNodeFullySelected,
-} from './DingTalkDocContextSelector'
+  MAX_DINGTALK_DOC_CONTEXTS,
+} from './dingtalk-context-utils'
 
 export function countDingTalkNodes(nodes: DingtalkDocNode[]): number {
   return nodes.reduce((count, node) => count + 1 + countDingTalkNodes(node.children ?? []), 0)
-}
-
-function dingTalkNodeMatchesSearch(node: DingtalkDocNode, query: string): boolean {
-  if (!query.trim()) return true
-  const normalized = query.trim().toLowerCase()
-  if (node.name.toLowerCase().includes(normalized)) return true
-  return (node.children ?? []).some(child => dingTalkNodeMatchesSearch(child, query))
-}
-
-function filterDingTalkNodes(nodes: DingtalkDocNode[], query: string): DingtalkDocNode[] {
-  if (!query.trim()) return nodes
-  const normalized = query.trim().toLowerCase()
-  return nodes.reduce<DingtalkDocNode[]>((result, node) => {
-    const children = filterDingTalkNodes(node.children ?? [], query)
-    if (node.name.toLowerCase().includes(normalized) || children.length > 0) {
-      result.push({ ...node, children })
-    }
-    return result
-  }, [])
 }
 
 function getDingTalkNodeState(nodes: DingtalkDocNode[], selectedIds: Set<string>) {
@@ -97,24 +89,32 @@ export function useDingTalkKnowledgeSelection({
   onDeselect,
   onSelectMultiple,
   onDeselectMultiple,
+  onLimitReached,
 }: {
   selectedContexts: ContextItem[]
   onSelect: (context: ContextItem) => void
   onDeselect: (id: number | string) => void
   onSelectMultiple?: (contexts: ContextItem[]) => void
   onDeselectMultiple?: (ids: (number | string)[]) => void
+  onLimitReached?: () => void
 }) {
   const selectedIds = getDingTalkSelectedIds(selectedContexts)
 
   const selectMultiple = useCallback(
     (contexts: DingTalkDocContext[]) => {
+      const availableSlots = MAX_DINGTALK_DOC_CONTEXTS - selectedIds.size
+      const limitedContexts = contexts.slice(0, Math.max(availableSlots, 0))
+      if (limitedContexts.length < contexts.length) {
+        onLimitReached?.()
+      }
+      if (limitedContexts.length === 0) return
       if (onSelectMultiple) {
-        onSelectMultiple(contexts)
+        onSelectMultiple(limitedContexts)
         return
       }
-      contexts.forEach(context => onSelect(context))
+      limitedContexts.forEach(context => onSelect(context))
     },
-    [onSelect, onSelectMultiple]
+    [onLimitReached, onSelect, onSelectMultiple, selectedIds.size]
   )
 
   const deselectMultiple = useCallback(
@@ -146,7 +146,7 @@ export function useDingTalkKnowledgeSelection({
       const selectionKey = getDingTalkSelectionKey(node.source, node.dingtalk_node_id)
       if (node.node_type === 'folder') {
         const allIds = collectDescendants(node)
-        const allSelected = allIds.every(id => selectedIds.has(id))
+        const allSelected = allIds.length > 0 && allIds.every(id => selectedIds.has(id))
         if (allSelected) {
           deselectMultiple(allIds)
           return
@@ -161,10 +161,22 @@ export function useDingTalkKnowledgeSelection({
       if (selectedIds.has(selectionKey)) {
         onDeselect(selectionKey)
       } else {
+        if (selectedIds.size >= MAX_DINGTALK_DOC_CONTEXTS) {
+          onLimitReached?.()
+          return
+        }
         onSelect(buildDingTalkDocContext(node))
       }
     },
-    [collectContexts, deselectMultiple, onDeselect, onSelect, selectMultiple, selectedIds]
+    [
+      collectContexts,
+      deselectMultiple,
+      onDeselect,
+      onLimitReached,
+      onSelect,
+      selectMultiple,
+      selectedIds,
+    ]
   )
 
   const toggleNodeList = useCallback(
@@ -260,6 +272,9 @@ export function DingTalkWikispaceRows({
   onRetry,
   onOpen,
   onToggle,
+  spaceKind = 'knowledge',
+  notConfiguredLabel,
+  emptyLabel,
 }: {
   nodes: DingtalkDocNode[]
   query: string
@@ -271,15 +286,23 @@ export function DingTalkWikispaceRows({
   onRetry: () => void
   onOpen: (node: DingtalkDocNode) => void
   onToggle: (node: DingtalkDocNode) => void
+  spaceKind?: 'knowledge' | 'drive'
+  notConfiguredLabel?: string
+  emptyLabel?: string
 }) {
   const { t } = useTranslation('chat')
   if (loading) return <DingTalkPickerLoading label={t('common:actions.loading')} />
   if (error) return <DingTalkPickerError message={error} onRetry={onRetry} />
-  if (!configured) return <DingTalkPickerEmpty label={t('dingtalkDocs.wikispaceNotConfigured')} />
+  if (!configured)
+    return (
+      <DingTalkPickerEmpty label={notConfiguredLabel ?? t('dingtalkDocs.wikispaceNotConfigured')} />
+    )
 
   const visibleNodes = nodes.filter(node => dingTalkNodeMatchesSearch(node, query))
   if (visibleNodes.length === 0)
-    return <DingTalkPickerEmpty label={t('dingtalkDocs.wikispaceEmpty')} />
+    return <DingTalkPickerEmpty label={emptyLabel ?? t('dingtalkDocs.wikispaceEmpty')} />
+
+  const SpaceIcon = spaceKind === 'drive' ? HardDrive : Database
 
   return (
     <div className="space-y-1 p-2">
@@ -309,7 +332,7 @@ export function DingTalkWikispaceRows({
             data-testid={`knowledge-picker-dingtalk-space-${node.dingtalk_node_id}`}
           >
             <span className="flex min-w-0 items-center gap-2">
-              <Database className="h-4 w-4 shrink-0 text-text-muted" />
+              <SpaceIcon className="h-4 w-4 shrink-0 text-text-muted" />
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium">{node.name}</span>
                 <span className="block text-xs text-text-muted">

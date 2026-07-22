@@ -48,6 +48,7 @@ from app.api.endpoints import (
     wizard,
     work_queue,
 )
+from app.api.endpoints.dingtalk_team_files import router as dingtalk_team_files_router
 from app.api.endpoints.dingtalk_wikispace import router as dingtalk_wikispace_router
 from app.core.config import settings
 
@@ -232,6 +233,11 @@ api_router.include_router(
     dingtalk_wikispace_router,
     prefix="/dingtalk-wikispace",
     tags=["dingtalk-wikispace"],
+)
+api_router.include_router(
+    dingtalk_team_files_router,
+    prefix="/dingtalk-team-files",
+    tags=["dingtalk-team-files"],
 )
 
 # Work queue endpoints (message forwarding and inbox)

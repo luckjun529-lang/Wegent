@@ -10,7 +10,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useTranslation } from '@/hooks/useTranslation'
 import type { ContextItem } from '@/types/context'
-import { DingTalkDocContextSelector, getDingTalkSelectedIds } from './DingTalkDocContextSelector'
+import { DingTalkDocContextSelector } from './DingTalkDocContextSelector'
+import { getDingTalkSelectedIds } from './dingtalk-context-utils'
 
 interface DingTalkDocButtonProps {
   selectedContexts: ContextItem[]

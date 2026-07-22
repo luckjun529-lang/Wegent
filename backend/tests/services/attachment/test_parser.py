@@ -45,6 +45,31 @@ def _build_xmind_archive() -> bytes:
     return archive.getvalue()
 
 
+def _build_docx_document() -> bytes:
+    """Build a minimal Word document for parser tests."""
+    from docx import Document
+
+    document = Document()
+    document.add_heading("Quarterly Report", level=1)
+    document.add_paragraph("Revenue increased year over year.")
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def _build_pptx_presentation() -> bytes:
+    """Build a minimal PowerPoint presentation for parser tests."""
+    from pptx import Presentation
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+    slide.shapes.title.text = "Product Roadmap"
+    slide.placeholders[1].text = "Launch in the fourth quarter"
+    output = io.BytesIO()
+    presentation.save(output)
+    return output.getvalue()
+
+
 class TestDocumentParser:
     """Test cases for DocumentParser class."""
 
@@ -170,6 +195,20 @@ class TestDocumentParser:
         assert result.truncation_info.is_truncated is True
         assert result.truncation_info.original_length == len(content)
         assert result.truncation_info.truncated_length == max_length
+
+    def test_parse_docx_file(self):
+        """Word documents expose paragraph text to chat attachment injection."""
+        result = self.parser.parse(_build_docx_document(), ".docx")
+
+        assert "Quarterly Report" in result.text
+        assert "Revenue increased year over year." in result.text
+
+    def test_parse_pptx_file(self):
+        """PowerPoint documents expose slide text to chat attachment injection."""
+        result = self.parser.parse(_build_pptx_presentation(), ".pptx")
+
+        assert "Product Roadmap" in result.text
+        assert "Launch in the fourth quarter" in result.text
 
     def test_parse_csv_file(self):
         """Test parsing CSV file."""

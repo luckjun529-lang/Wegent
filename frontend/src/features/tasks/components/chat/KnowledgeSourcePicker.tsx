@@ -14,6 +14,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  HardDrive,
   Loader2,
   MessageSquareText,
   RotateCw,
@@ -49,7 +50,8 @@ import type {
 import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/use-toast'
 import { useTranslation } from '@/hooks/useTranslation'
-import { useDingTalkDocTrees } from './DingTalkDocContextSelector'
+import { MAX_DINGTALK_DOC_CONTEXTS } from './dingtalk-context-utils'
+import { useDingTalkDocTrees } from './useDingTalkDocTrees'
 import {
   countDingTalkNodes,
   DingTalkDocsRootRow,
@@ -76,6 +78,7 @@ type SourceKey =
   | 'organization'
   | 'dingtalk'
   | 'dingtalk:docs'
+  | 'dingtalk:team-files'
   | 'dingtalk:wikispace'
   | `external:${string}`
 
@@ -505,6 +508,11 @@ export function KnowledgeSourcePicker({
     onDeselect,
     onSelectMultiple,
     onDeselectMultiple,
+    onLimitReached: () =>
+      toast({
+        title: tChat('dingtalkDocs.maxSelected', { count: MAX_DINGTALK_DOC_CONTEXTS }),
+        variant: 'destructive',
+      }),
   })
 
   const externalProviderId = activeSource.startsWith('external:')
@@ -613,7 +621,7 @@ export function KnowledgeSourcePicker({
       {
         key: 'dingtalk' as SourceKey,
         label: tChat('dingtalkDocs.tabTitle'),
-        count: 2,
+        count: 3,
         icon: MessageSquareText,
       },
       ...browseableExternalSources.map(source => ({
@@ -1096,6 +1104,26 @@ export function KnowledgeSourcePicker({
       )
     }
 
+    if (activeSource === 'dingtalk:team-files') {
+      return (
+        <DingTalkWikispaceRows
+          nodes={dingtalkTrees.teamFileNodes}
+          query={searchValue}
+          loading={dingtalkTrees.teamFileLoading}
+          error={dingtalkTrees.teamFileError}
+          configured={dingtalkTrees.teamFileConfigured}
+          selectedIds={selectedDingTalkIds}
+          activeNode={activeDingTalkSpace}
+          onRetry={dingtalkTrees.fetchTeamFiles}
+          onOpen={setActiveDingTalkSpace}
+          onToggle={toggleDingTalkNode}
+          spaceKind="drive"
+          notConfiguredLabel={tChat('dingtalkDocs.teamFilesNotConfigured')}
+          emptyLabel={tChat('dingtalkDocs.teamFilesEmpty')}
+        />
+      )
+    }
+
     if (activeExternalSource) {
       if (!externalScope) {
         return <PickerEmpty label={t('picker.selectKnowledgeBase')} />
@@ -1257,6 +1285,12 @@ export function KnowledgeSourcePicker({
                       icon: FileText,
                     },
                     {
+                      key: 'dingtalk:team-files' as SourceKey,
+                      label: tChat('dingtalkDocs.teamFilesTab'),
+                      count: dingtalkTrees.teamFileTotalCount,
+                      icon: HardDrive,
+                    },
+                    {
                       key: 'dingtalk:wikispace' as SourceKey,
                       label: tChat('dingtalkDocs.wikispaceTab'),
                       count: dingtalkTrees.wikispaceTotalCount,
@@ -1283,11 +1317,7 @@ export function KnowledgeSourcePicker({
                         setActiveKnowledgeBase(null)
                         setActiveDingTalkSpace(null)
                       }}
-                      data-testid={
-                        section.key === 'dingtalk:docs'
-                          ? 'knowledge-picker-dingtalk-docs'
-                          : 'knowledge-picker-dingtalk-wikispace'
-                      }
+                      data-testid={`knowledge-picker-${section.key.replace(':', '-')}`}
                     >
                       <span className="flex min-w-0 items-center gap-2">
                         <SectionIcon className="h-4 w-4 shrink-0 text-text-muted" />
@@ -1348,6 +1378,29 @@ export function KnowledgeSourcePicker({
           query={searchValue}
           selectedIds={selectedDingTalkIds}
           onRetry={dingtalkTrees.fetchWikispace}
+          onToggle={toggleDingTalkNode}
+          onToggleAll={toggleDingTalkNodeList}
+        />
+      )
+    }
+
+    if (activeSource === 'dingtalk:team-files') {
+      if (!activeDingTalkSpace) {
+        return <PickerEmpty label={t('picker.selectKnowledgeBase')} />
+      }
+      return (
+        <DingTalkDocumentColumn
+          title={activeDingTalkSpace.name}
+          nodes={activeDingTalkSpace.children ?? []}
+          totalCount={countDingTalkNodes(activeDingTalkSpace.children ?? [])}
+          loading={dingtalkTrees.teamFileLoading}
+          error={dingtalkTrees.teamFileError}
+          configured={dingtalkTrees.teamFileConfigured}
+          notConfiguredLabel={tChat('dingtalkDocs.teamFilesNotConfigured')}
+          emptyLabel={tChat('dingtalkDocs.teamFilesEmpty')}
+          query={searchValue}
+          selectedIds={selectedDingTalkIds}
+          onRetry={dingtalkTrees.fetchTeamFiles}
           onToggle={toggleDingTalkNode}
           onToggleAll={toggleDingTalkNodeList}
         />

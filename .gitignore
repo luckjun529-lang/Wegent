@@ -42,6 +42,9 @@ env/
 .env
 .venv-x86_64
 
+# Backend runtime data (includes per-user DWS login state)
+backend/data/
+
 # Logs
 logs/
 *.log

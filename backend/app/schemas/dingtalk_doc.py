@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.dingtalk_doc import DingTalkNodeSource
 
@@ -43,7 +43,7 @@ class DingtalkDocNode(DingtalkDocNodeBase):
 class DingtalkDocNodeWithChildren(DingtalkDocNode):
     """Schema for a DingTalk document node with children (for tree structure)."""
 
-    children: list["DingtalkDocNodeWithChildren"] = []
+    children: list["DingtalkDocNodeWithChildren"] = Field(default_factory=list)
 
 
 class DingtalkDocTreeResponse(BaseModel):
@@ -74,7 +74,9 @@ class DingtalkSyncResult(BaseModel):
     # Number of nodes returned by DWS before DB filtering.
     # Useful for diagnosing issues where DWS returns data but nothing is
     # written (e.g. all nodes lack a nodeId).
-    mcp_nodes_fetched: int = 0
+    dws_nodes_fetched: int = 0
+    # True when the safety limit or traversal depth prevented a complete sync.
+    truncated: bool = False
 
 
 def build_dingtalk_tree(

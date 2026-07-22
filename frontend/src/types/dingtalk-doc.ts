@@ -6,7 +6,7 @@
  * DingTalk synced document node types.
  */
 
-export type DingtalkNodeSource = 'docs' | 'wikispace'
+export type DingtalkNodeSource = 'docs' | 'wikispace' | 'team_files'
 
 export interface DingtalkDocNode {
   id: number
@@ -45,6 +45,8 @@ export interface DingtalkSyncResult {
   deleted: number
   total: number
   sync_time: string
+  dws_nodes_fetched?: number
+  truncated?: boolean
 }
 
 export type DingtalkDwsAuthStatus =

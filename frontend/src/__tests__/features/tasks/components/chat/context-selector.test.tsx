@@ -19,11 +19,14 @@ const mockGetDingTalkDocs = jest.fn()
 const mockGetDingTalkSyncStatus = jest.fn()
 const mockGetDingTalkWikispaceNodes = jest.fn()
 const mockGetDingTalkWikispaceSyncStatus = jest.fn()
+const mockGetDingTalkTeamFiles = jest.fn()
+const mockGetDingTalkTeamFilesSyncStatus = jest.fn()
 const mockGetDingTalkAuthStatus = jest.fn()
 const mockStartDingTalkDeviceLogin = jest.fn()
 const mockGetDingTalkDeviceLoginStatus = jest.fn()
 const mockSyncDingTalkDocs = jest.fn()
 const mockSyncDingTalkWikispaceNodes = jest.fn()
+const mockSyncDingTalkTeamFiles = jest.fn()
 const mockT = (key: string) => key
 
 jest.mock('@/hooks/useTranslation', () => ({
@@ -72,8 +75,11 @@ jest.mock('@/apis/dingtalk-doc', () => ({
     getSyncStatus: (...args: unknown[]) => mockGetDingTalkSyncStatus(...args),
     getWikispaceNodes: (...args: unknown[]) => mockGetDingTalkWikispaceNodes(...args),
     getWikispaceSyncStatus: (...args: unknown[]) => mockGetDingTalkWikispaceSyncStatus(...args),
+    getTeamFiles: (...args: unknown[]) => mockGetDingTalkTeamFiles(...args),
+    getTeamFilesSyncStatus: (...args: unknown[]) => mockGetDingTalkTeamFilesSyncStatus(...args),
     syncDocs: (...args: unknown[]) => mockSyncDingTalkDocs(...args),
     syncWikispaceNodes: (...args: unknown[]) => mockSyncDingTalkWikispaceNodes(...args),
+    syncTeamFiles: (...args: unknown[]) => mockSyncDingTalkTeamFiles(...args),
   },
 }))
 
@@ -234,8 +240,20 @@ describe('ContextSelector organization grouping', () => {
       last_synced_at: null,
       total_nodes: 0,
     })
+    mockGetDingTalkTeamFiles.mockResolvedValue({ nodes: [], total_count: 0 })
+    mockGetDingTalkTeamFilesSyncStatus.mockResolvedValue({
+      is_configured: true,
+      last_synced_at: null,
+      total_nodes: 0,
+    })
     mockSyncDingTalkDocs.mockResolvedValue({ added: 0, updated: 0, deleted: 0, total: 0 })
     mockSyncDingTalkWikispaceNodes.mockResolvedValue({
+      added: 0,
+      updated: 0,
+      deleted: 0,
+      total: 0,
+    })
+    mockSyncDingTalkTeamFiles.mockResolvedValue({
       added: 0,
       updated: 0,
       deleted: 0,
@@ -1184,10 +1202,6 @@ describe('ContextSelector organization grouping', () => {
         is_authenticated: false,
         auth_status: 'unauthenticated',
       })
-      .mockResolvedValueOnce({
-        is_authenticated: false,
-        auth_status: 'unauthenticated',
-      })
       .mockResolvedValue({
         is_authenticated: true,
         auth_status: 'authenticated',
@@ -1221,6 +1235,7 @@ describe('ContextSelector organization grouping', () => {
       expect(mockGetDingTalkDeviceLoginStatus).toHaveBeenCalledWith('session-1')
       expect(mockSyncDingTalkDocs).toHaveBeenCalled()
       expect(mockSyncDingTalkWikispaceNodes).toHaveBeenCalled()
+      expect(mockSyncDingTalkTeamFiles).toHaveBeenCalled()
       expect(screen.queryByTestId('dingtalk-auth-panel')).not.toBeInTheDocument()
       expect(screen.getByTestId('dingtalk-ctx-node-docs-file-1')).toBeInTheDocument()
     })
@@ -1304,6 +1319,83 @@ describe('ContextSelector organization grouping', () => {
         screen.getByTestId('knowledge-picker-dingtalk-node-wikispace-wiki-file-1')
       ).toBeInTheDocument()
     })
+  })
+
+  it('renders and selects documents from DingTalk team files', async () => {
+    const onSelectMultiple = jest.fn()
+    mockGetDingTalkTeamFiles.mockResolvedValue({
+      total_count: 2,
+      nodes: [
+        {
+          id: 20,
+          dingtalk_node_id: 'team-root-1',
+          name: '研发团队文件',
+          doc_url: 'https://alidocs.dingtalk.com/i/nodes/team-root-1',
+          parent_node_id: '',
+          node_type: 'folder',
+          workspace_id: '1001',
+          content_type: '',
+          source: 'team_files',
+          is_active: true,
+          last_synced_at: '',
+          created_at: '',
+          updated_at: '',
+          children: [
+            {
+              id: 21,
+              dingtalk_node_id: 'team-file-1',
+              name: '架构方案.pdf',
+              doc_url: 'https://alidocs.dingtalk.com/i/nodes/team-file-1',
+              parent_node_id: 'team-root-1',
+              node_type: 'file',
+              workspace_id: '1001',
+              content_type: 'pdf',
+              source: 'team_files',
+              is_active: true,
+              last_synced_at: '',
+              created_at: '',
+              updated_at: '',
+              children: [],
+            },
+          ],
+        },
+      ],
+    })
+
+    render(
+      <ContextSelector
+        open={true}
+        onOpenChange={jest.fn()}
+        selectedContexts={[]}
+        onSelect={jest.fn()}
+        onDeselect={jest.fn()}
+        onSelectMultiple={onSelectMultiple}
+      >
+        <button>trigger</button>
+      </ContextSelector>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('knowledge-picker-dingtalk-parent')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('knowledge-picker-dingtalk-parent'))
+    fireEvent.click(screen.getByTestId('knowledge-picker-dingtalk-team-files'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('knowledge-picker-dingtalk-space-team-root-1')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('knowledge-picker-dingtalk-space-team-root-1'))
+
+    expect(onSelectMultiple).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 'team_files:team-file-1',
+        type: 'dingtalk_doc',
+        source: 'team_files',
+      }),
+    ])
+    expect(
+      screen.getByTestId('knowledge-picker-dingtalk-node-team_files-team-file-1')
+    ).toBeInTheDocument()
   })
 
   it('auto-expands the folder path for selected internal documents', async () => {

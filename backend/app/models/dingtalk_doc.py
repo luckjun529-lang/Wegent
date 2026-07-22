@@ -17,6 +17,7 @@ class DingTalkNodeSource(str, enum.Enum):
 
     DOCS = "docs"
     WIKISPACE = "wikispace"
+    TEAM_FILES = "team_files"
 
 
 class DingtalkSyncedNode(Base):
@@ -44,7 +45,7 @@ class DingtalkSyncedNode(Base):
     node_type = Column(String(32), nullable=False)
     # DingTalk workspace (knowledge base) ID
     workspace_id = Column(String(64), nullable=False, default="")
-    # Source of the node: 'docs' (personal documents) or 'wikispace' (knowledge base)
+    # Source of the node: personal docs, knowledge bases, or team files
     source = Column(String(16), nullable=False, default=DingTalkNodeSource.DOCS.value)
     # Content type (e.g., ALIDOC)
     content_type = Column(String(32), nullable=False, default="")

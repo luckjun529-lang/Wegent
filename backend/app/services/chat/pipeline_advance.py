@@ -132,19 +132,27 @@ async def advance_pipeline_stage_and_send(
     )
     pipeline_bot_ids = [advance_result["next_stage_bot_id"]]
     previous_bot_id = advance_result.get("current_stage_bot_id")
-    attachment_ids_to_link, contexts_to_link = await _prepare_payload_contexts(
+    (
+        attachment_ids_to_link,
+        contexts_to_link,
+        dingtalk_attachment_ids,
+    ) = await _prepare_payload_contexts(
         db=db,
         user=user,
         payload=payload,
     )
 
-    _, rag_prompt = await process_context_and_rag(
-        message=handoff_message,
-        contexts=contexts_to_link,
-        should_trigger_ai=True,
-        user_id=user.id,
-        db=db,
-    )
+    try:
+        _, rag_prompt = await process_context_and_rag(
+            message=handoff_message,
+            contexts=contexts_to_link,
+            should_trigger_ai=True,
+            user_id=user.id,
+            db=db,
+        )
+    except Exception:
+        _cleanup_dingtalk_attachments(db, user.id, dingtalk_attachment_ids)
+        raise
 
     params = TaskCreationParams(
         message=handoff_message,
@@ -172,26 +180,34 @@ async def advance_pipeline_stage_and_send(
         ),
     )
 
-    result = await create_chat_task(
-        db=db,
-        user=user,
-        team=team,
-        message=handoff_message,
-        params=params,
-        task_id=task_id,
-        should_trigger_ai=True,
-        rag_prompt=rag_prompt,
-        source="web",
-    )
+    try:
+        result = await create_chat_task(
+            db=db,
+            user=user,
+            team=team,
+            message=handoff_message,
+            params=params,
+            task_id=task_id,
+            should_trigger_ai=True,
+            rag_prompt=rag_prompt,
+            source="web",
+        )
+    except Exception:
+        _cleanup_dingtalk_attachments(db, user.id, dingtalk_attachment_ids)
+        raise
 
-    linked_context_ids = await _link_payload_contexts(
-        db=db,
-        user=user,
-        task=result.task,
-        user_subtask=result.user_subtask,
-        attachment_ids=attachment_ids_to_link,
-        contexts=contexts_to_link,
-    )
+    try:
+        linked_context_ids = await _link_payload_contexts(
+            db=db,
+            user=user,
+            task=result.task,
+            user_subtask=result.user_subtask,
+            attachment_ids=attachment_ids_to_link,
+            contexts=contexts_to_link,
+        )
+    except Exception:
+        _cleanup_dingtalk_attachments(db, user.id, dingtalk_attachment_ids)
+        raise
     if linked_context_ids:
         logger.info(
             "[PipelineAdvance] Linked %s context(s) for handoff subtask %s",
@@ -312,7 +328,7 @@ async def _prepare_payload_contexts(
     db: Session,
     user: User,
     payload: Any,
-) -> tuple[list[int], Any]:
+) -> tuple[list[int], Any, list[int]]:
     from app.services.dingtalk_doc_materialization_service import (
         dingtalk_doc_materialization_service,
     )
@@ -324,7 +340,7 @@ async def _prepare_payload_contexts(
 
     contexts = getattr(payload, "contexts", None)
     if not attachment_ids and not contexts:
-        return [], None
+        return [], None, []
 
     dingtalk_attachment_ids = (
         await dingtalk_doc_materialization_service.materialize_contexts(
@@ -337,7 +353,25 @@ async def _prepare_payload_contexts(
     contexts_to_link = (
         dingtalk_doc_materialization_service.filter_non_dingtalk_contexts(contexts)
     )
-    return attachment_ids, contexts_to_link
+    return attachment_ids, contexts_to_link, dingtalk_attachment_ids
+
+
+def _cleanup_dingtalk_attachments(
+    db: Session,
+    user_id: int,
+    attachment_ids: list[int],
+) -> None:
+    if not attachment_ids:
+        return
+    from app.services.dingtalk_doc_materialization_service import (
+        dingtalk_doc_materialization_service,
+    )
+
+    dingtalk_doc_materialization_service.delete_unlinked_attachments(
+        db,
+        user_id,
+        attachment_ids,
+    )
 
 
 async def _emit_task_status(task_id: int, status: str, progress: int) -> None:

@@ -16,6 +16,7 @@ import type {
   QueueMessageContext,
 } from '@/types/context'
 import { formatDocumentCount } from '@/lib/i18n-helpers'
+import { getSafeHttpUrl } from '@/utils/safe-url'
 
 function formatKnowledgeScopeLabel(
   context: KnowledgeBaseContext,
@@ -72,6 +73,8 @@ export default function ContextBadge({
   const { t } = useTranslation('knowledge')
   const { t: tChat } = useTranslation('chat')
   const Icon = getContextIcon(context.type)
+  const safeDingTalkUrl =
+    context.type === 'dingtalk_doc' ? getSafeHttpUrl((context as DingTalkDocContext).doc_url) : null
 
   // Get badge color based on context type
   const getBadgeColor = () => {
@@ -97,21 +100,15 @@ export default function ContextBadge({
       e.stopPropagation()
       window.open(context.source_config.url, '_blank', 'noopener,noreferrer')
     }
-    if (
-      !disableUrlClick &&
-      context.type === 'dingtalk_doc' &&
-      (context as DingTalkDocContext).doc_url
-    ) {
+    if (!disableUrlClick && context.type === 'dingtalk_doc' && safeDingTalkUrl) {
       e.stopPropagation()
-      window.open((context as DingTalkDocContext).doc_url, '_blank', 'noopener,noreferrer')
+      window.open(safeDingTalkUrl, '_blank', 'noopener,noreferrer')
     }
   }
 
   const isClickable =
     (!disableUrlClick && context.type === 'table' && context.source_config?.url) ||
-    (!disableUrlClick &&
-      context.type === 'dingtalk_doc' &&
-      !!(context as DingTalkDocContext).doc_url)
+    (!disableUrlClick && context.type === 'dingtalk_doc' && !!safeDingTalkUrl)
 
   // Get remove button color based on context type
   const getRemoveButtonColor = () => {

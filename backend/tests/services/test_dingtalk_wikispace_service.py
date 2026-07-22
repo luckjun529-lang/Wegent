@@ -13,28 +13,7 @@ import pytest
 
 from app.models.dingtalk_doc import DingTalkNodeSource, DingtalkSyncedNode
 from app.services.dingtalk_doc_service import DingTalkDocService
-from app.services.dingtalk_wikispace_service import (
-    DingTalkWikiSpaceService,
-    _sanitize_url_for_telemetry,
-)
-
-
-class TestSanitizeUrlForTelemetry:
-    """Tests for URL sanitization used in telemetry."""
-
-    def test_preserves_port_while_stripping_credentials_and_query(self) -> None:
-        """Sanitized URL keeps host and port but removes credentials and query."""
-        sanitized = _sanitize_url_for_telemetry(
-            "https://user:secret@mcp.example.com:8443/api?token=secret#frag"
-        )
-
-        assert sanitized == "https://mcp.example.com:8443/api"
-
-    def test_returns_invalid_placeholder_on_parse_failure(self) -> None:
-        """Invalid URLs never echo the raw input back to telemetry."""
-        sanitized = _sanitize_url_for_telemetry("http://[invalid-url")
-
-        assert sanitized == "<invalid-url>"
+from app.services.dingtalk_wikispace_service import DingTalkWikiSpaceService
 
 
 class TestListWikiSpaces:
@@ -216,7 +195,7 @@ class TestFetchAllWikispaceNodes:
                 user_id=9
             )
 
-        assert result == []
+        assert result == ([], True)
 
     @pytest.mark.asyncio
     async def test_adds_kb_root_as_folder_node(self) -> None:
@@ -232,15 +211,17 @@ class TestFetchAllWikispaceNodes:
             patch.object(
                 DingTalkWikiSpaceService,
                 "_list_nodes_in_wikispace",
-                new=AsyncMock(return_value=None),
+                new=AsyncMock(return_value=True),
             ) as mock_list_nodes,
         ):
             result = await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(
                 user_id=9
             )
 
-        assert len(result) == 1
-        kb_root = result[0]
+        nodes, traversal_complete = result
+        assert traversal_complete is True
+        assert len(nodes) == 1
+        kb_root = nodes[0]
         assert kb_root["nodeId"] == "WSABC"
         assert kb_root["nodeType"] == "folder"
         assert kb_root["workspaceId"] == "WSABC"
@@ -262,8 +243,9 @@ class TestFetchAllWikispaceNodes:
             user_id: int,
             workspace_id: str,
             all_nodes: list,
-        ) -> None:
+        ) -> bool:
             list_nodes_calls.append(workspace_id)
+            return True
 
         with (
             patch.object(
@@ -282,12 +264,14 @@ class TestFetchAllWikispaceNodes:
             )
 
         assert list_nodes_calls == ["WS2"]
-        assert len(result) == 1
-        assert result[0]["workspaceId"] == "WS2"
+        nodes, traversal_complete = result
+        assert traversal_complete is True
+        assert len(nodes) == 1
+        assert nodes[0]["workspaceId"] == "WS2"
 
     @pytest.mark.asyncio
-    async def test_continues_after_kb_error(self) -> None:
-        """Continues syncing remaining KBs even if one fails."""
+    async def test_propagates_kb_error_without_partial_results(self) -> None:
+        """A failed KB traversal aborts before a partial cache can be persisted."""
         kb_nodes = [
             {"workspaceId": "WS_FAIL", "name": "Failing KB"},
             {"workspaceId": "WS_OK", "name": "Good KB"},
@@ -315,15 +299,11 @@ class TestFetchAllWikispaceNodes:
                 "_list_nodes_in_wikispace",
                 new=AsyncMock(side_effect=maybe_fail),
             ),
+            pytest.raises(ConnectionError, match="DWS connection failed"),
         ):
-            result = await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(
-                user_id=9
-            )
+            await DingTalkWikiSpaceService._fetch_all_wikispace_nodes(user_id=9)
 
-        assert call_count == 2
-        assert len(result) == 1
-        assert result[0]["workspaceId"] == "WS_OK"
-        assert all(node.get("workspaceId") != "WS_FAIL" for node in result)
+        assert call_count == 1
 
 
 class TestDedupeNodesById:
@@ -411,9 +391,9 @@ class TestReadHelpers:
         assert len(result) == 1
         assert result[0].name == "Active Wiki"
 
-    @patch.object(DingTalkWikiSpaceService, "is_configured", return_value=True)
-    def test_get_sync_status_counts_only_active_wikispace_nodes(
-        self, _mock_is_configured: MagicMock, test_db, test_user
+    @pytest.mark.asyncio
+    async def test_get_sync_status_counts_only_active_wikispace_nodes(
+        self, test_db, test_user
     ) -> None:
         """Sync status excludes docs source and inactive wikispace rows."""
         older = datetime(2026, 1, 1, 10, 0, 0)
@@ -457,9 +437,19 @@ class TestReadHelpers:
         test_db.add_all([active_old, active_new, docs_node])
         test_db.commit()
 
-        status = DingTalkWikiSpaceService.get_sync_status(test_user, test_db)
+        with patch(
+            "app.services.dingtalk_wikispace_service.dingtalk_dws_service.auth_status",
+            new=AsyncMock(
+                return_value={
+                    "is_authenticated": True,
+                    "auth_status": "authenticated",
+                }
+            ),
+        ):
+            status = await DingTalkWikiSpaceService.get_sync_status(test_user, test_db)
 
         assert status["is_configured"] is True
+        assert status["auth_status"] == "authenticated"
         assert status["total_nodes"] == 2
         assert status["last_synced_at"] == newer
 
@@ -497,7 +487,7 @@ class TestSyncWikispaceNodes:
             patch.object(
                 DingTalkWikiSpaceService,
                 "_fetch_all_wikispace_nodes",
-                new=AsyncMock(return_value=nodes),
+                new=AsyncMock(return_value=(nodes, True)),
             ) as mock_fetch,
             patch.object(
                 DingTalkDocService,
@@ -521,4 +511,4 @@ class TestSyncWikispaceNodes:
         mock_sync.assert_called_once()
         assert mock_sync.call_args.kwargs["source"] == DingTalkNodeSource.WIKISPACE
         assert result["added"] == 1
-        assert result["mcp_nodes_fetched"] == 1
+        assert result["dws_nodes_fetched"] == 1
