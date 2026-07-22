@@ -19,7 +19,7 @@ from app.services.dingtalk_doc_service import (
     MAX_RECURSION_DEPTH,
     DingTalkDocService,
 )
-from app.services.dingtalk_dws_service import dingtalk_dws_service
+from app.services.dingtalk_dws_service import DwsCommandError, dingtalk_dws_service
 from shared.telemetry.decorators import add_span_event, trace_async, trace_sync
 
 logger = logging.getLogger(__name__)
@@ -189,16 +189,27 @@ class DingTalkTeamFilesService:
                 continue
             root_node = DingTalkTeamFilesService._build_space_root(space, space_id)
             root_node_id = DingTalkDocService._extract_node_id(root_node)
+            space_start = len(all_nodes)
             all_nodes.append(root_node)
-            space_complete = await DingTalkTeamFilesService._list_nodes_recursive(
-                user_id=user_id,
-                space_id=space_id,
-                parent_node_id=root_node_id,
-                folder_id=None,
-                all_nodes=all_nodes,
-                depth=0,
-                visited_folders={(space_id, root_node_id)},
-            )
+            try:
+                space_complete = await DingTalkTeamFilesService._list_nodes_recursive(
+                    user_id=user_id,
+                    space_id=space_id,
+                    parent_node_id=root_node_id,
+                    folder_id=None,
+                    all_nodes=all_nodes,
+                    depth=0,
+                    visited_folders={(space_id, root_node_id)},
+                )
+            except DwsCommandError as exc:
+                if not dingtalk_dws_service.is_access_denied_error(exc):
+                    raise
+                del all_nodes[space_start:]
+                logger.info(
+                    "Skipping inaccessible DingTalk team space %s",
+                    space_id,
+                )
+                continue
             traversal_complete = traversal_complete and space_complete
         return DingTalkDocService._dedupe_nodes_by_id(all_nodes), traversal_complete
 

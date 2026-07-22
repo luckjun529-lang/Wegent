@@ -118,6 +118,39 @@ class TestDingTalkDwsService:
         ]
 
     @pytest.mark.asyncio
+    async def test_run_extracts_structured_dws_error(self) -> None:
+        """Pretty-printed DWS errors expose their message and server code."""
+
+        class FailedProcess:
+            returncode = 1
+
+            async def communicate(self):
+                return (
+                    b"",
+                    """{
+  "error": {
+    "message": "Access denied to DingTalk drive space",
+    "server_error_code": "forbidden.accessDenied"
+  }
+}
+""".encode(),
+                )
+
+        with (
+            patch(
+                "app.services.dingtalk_dws_service.asyncio.create_subprocess_exec",
+                new=AsyncMock(return_value=FailedProcess()),
+            ),
+            patch.object(DingTalkDwsService, "_build_env", return_value={}),
+        ):
+            with pytest.raises(DwsCommandError) as error:
+                await DingTalkDwsService.run(42, ["drive", "list"])
+
+        assert str(error.value) == "Access denied to DingTalk drive space"
+        assert error.value.server_error_code == "forbidden.accessDenied"
+        assert DingTalkDwsService.is_access_denied_error(error.value) is True
+
+    @pytest.mark.asyncio
     async def test_auth_status_authenticated(self) -> None:
         """Authenticated DWS payloads are normalized for API callers."""
         with patch.object(

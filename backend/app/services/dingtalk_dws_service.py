@@ -46,11 +46,13 @@ class DwsCommandError(RuntimeError):
         returncode: int | None = None,
         stdout: str = "",
         stderr: str = "",
+        server_error_code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+        self.server_error_code = server_error_code
 
 
 @dataclass
@@ -135,11 +137,14 @@ class DingTalkDwsService:
         stderr = stderr_bytes.decode("utf-8", errors="replace")
 
         if process.returncode != 0:
+            error_output = stderr or stdout or "DWS command failed"
+            error_message, server_error_code = cls._parse_error_output(error_output)
             raise DwsCommandError(
-                cls._safe_error_message(stderr or stdout or "DWS command failed"),
+                error_message,
                 returncode=process.returncode,
                 stdout=stdout,
                 stderr=stderr,
+                server_error_code=server_error_code,
             )
 
         return DwsCommandResult(
@@ -176,12 +181,41 @@ class DingTalkDwsService:
             return args
         return [*args, "--format", "json"]
 
-    @staticmethod
-    def _safe_error_message(raw: str) -> str:
+    @classmethod
+    def _parse_error_output(cls, raw: str) -> tuple[str, str | None]:
+        """Extract a safe message and server code from DWS JSON errors."""
+        for candidate in cls._json_candidates(raw):
+            if not isinstance(candidate, dict):
+                continue
+            error = candidate.get("error")
+            if not isinstance(error, dict):
+                continue
+            message = error.get("message") or error.get("hint")
+            server_error_code = error.get("server_error_code")
+            if message:
+                return str(message).strip()[:500], (
+                    str(server_error_code) if server_error_code else None
+                )
+
         message = (raw or "").strip().splitlines()
         if not message:
-            return "DWS command failed"
-        return message[-1][:500]
+            return "DWS command failed", None
+        meaningful_lines = [
+            line.strip() for line in message if line.strip() not in {"{", "}", "[", "]"}
+        ]
+        return (meaningful_lines[-1] if meaningful_lines else message[-1])[:500], None
+
+    @classmethod
+    def _safe_error_message(cls, raw: str) -> str:
+        return cls._parse_error_output(raw)[0]
+
+    @staticmethod
+    def is_access_denied_error(exc: DwsCommandError) -> bool:
+        """Return whether DWS rejected access to a DingTalk drive space."""
+        if exc.server_error_code == "forbidden.accessDenied":
+            return True
+        raw = f"{exc.stdout}\n{exc.stderr}\n{exc}".lower()
+        return "forbidden.accessdenied" in raw or "没有权限访问该钉盘空间" in raw
 
     @staticmethod
     def _parse_json_stdout(stdout: str) -> Any:

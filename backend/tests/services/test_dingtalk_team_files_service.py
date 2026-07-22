@@ -13,6 +13,7 @@ import pytest
 
 from app.models.dingtalk_doc import DingTalkNodeSource
 from app.services.dingtalk_doc_service import DingTalkDocService
+from app.services.dingtalk_dws_service import DwsCommandError
 from app.services.dingtalk_team_files_service import DingTalkTeamFilesService
 
 
@@ -124,6 +125,72 @@ class TestDingTalkTeamFilesService:
         assert nodes[0]["nodeType"] == "folder"
         assert nodes[1]["parentId"] == "root-1"
         mock_list.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_fetch_skips_inaccessible_space_and_continues(self) -> None:
+        """Stale org-space entries must not block accessible team files."""
+        spaces = [
+            {"spaceId": "denied", "rootFolderId": "denied-root"},
+            {"spaceId": "allowed", "rootFolderId": "allowed-root"},
+        ]
+
+        async def list_space(**kwargs) -> bool:
+            if kwargs["space_id"] == "denied":
+                raise DwsCommandError(
+                    "Access denied",
+                    server_error_code="forbidden.accessDenied",
+                )
+            kwargs["all_nodes"].append(
+                {
+                    "fileId": "file-1",
+                    "nodeType": "file",
+                    "name": "Roadmap.pdf",
+                    "parentId": kwargs["parent_node_id"],
+                    "workspaceId": kwargs["space_id"],
+                }
+            )
+            return True
+
+        with (
+            patch.object(
+                DingTalkTeamFilesService,
+                "_list_team_spaces",
+                new=AsyncMock(return_value=spaces),
+            ),
+            patch.object(
+                DingTalkTeamFilesService,
+                "_list_nodes_recursive",
+                new=AsyncMock(side_effect=list_space),
+            ),
+        ):
+            nodes, traversal_complete = (
+                await DingTalkTeamFilesService._fetch_all_team_file_nodes(9)
+            )
+
+        assert traversal_complete is True
+        assert [DingTalkDocService._extract_node_id(node) for node in nodes] == [
+            "allowed-root",
+            "file-1",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_fetch_does_not_hide_non_permission_errors(self) -> None:
+        """Network and command failures still fail the whole synchronization."""
+        spaces = [{"spaceId": "1001", "rootFolderId": "root-1"}]
+        with (
+            patch.object(
+                DingTalkTeamFilesService,
+                "_list_team_spaces",
+                new=AsyncMock(return_value=spaces),
+            ),
+            patch.object(
+                DingTalkTeamFilesService,
+                "_list_nodes_recursive",
+                new=AsyncMock(side_effect=DwsCommandError("network failed")),
+            ),
+        ):
+            with pytest.raises(DwsCommandError, match="network failed"):
+                await DingTalkTeamFilesService._fetch_all_team_file_nodes(9)
 
     @pytest.mark.asyncio
     async def test_sync_routes_rows_to_team_files_source(self) -> None:
