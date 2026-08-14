@@ -86,7 +86,7 @@ import type {
 } from '@/types/api'
 import { connectorDisplayName } from './connectorDisplayName'
 import { holdBackInFlightMarketplaceInstalls } from './holdBackInFlightMarketplaceInstalls'
-import { retainMarketplaceInstallHints } from './retainMarketplaceInstallHints'
+import { retainMarketplaceInstalledState } from './retainMarketplaceInstallHints'
 import { type InstalledPluginItem } from './PluginManagementRows'
 import { PluginCreateMenu } from './PluginCreateMenu'
 import { PluginDetailView } from './PluginDetailView'
@@ -3155,22 +3155,28 @@ export function PluginsWorkspace({
           ),
         diskPersonalItemsForMerge
       )
-      const heldBack = holdBackInFlightMarketplaceInstalls({
-        items: mergeMarketplaceCatalog(
-          cloudItems,
-          localRows,
-          nextInstalledRaw.map(plugin => plugin.raw)
-        ),
-        installed: nextInstalledRaw,
-        installingIds: installingMarketplacePluginIdsRef.current,
-        authPluginKey: pendingLocalConnectorAuthRef.current?.target.pluginKey,
-      })
-      const nextInstalled = heldBack.installed
       const previousMarketplaceItems =
         pluginMarketplaceStateRef.current.items.length > 0
           ? pluginMarketplaceStateRef.current.items
           : (getPluginMarketplaceCache(marketplaceCacheKeyValue)?.marketplaceItems ?? [])
-      const mergedItems = retainMarketplaceInstallHints(previousMarketplaceItems, heldBack.items)
+      const retained = retainMarketplaceInstalledState({
+        previousItems: previousMarketplaceItems,
+        nextItems: mergeMarketplaceCatalog(
+          cloudItems,
+          localRows,
+          nextInstalledRaw.map(plugin => plugin.raw)
+        ),
+        previousInstalled: installedPluginsRef.current,
+        nextInstalled: nextInstalledRaw,
+      })
+      const heldBack = holdBackInFlightMarketplaceInstalls({
+        items: retained.items,
+        installed: retained.installed,
+        installingIds: installingMarketplacePluginIdsRef.current,
+        authPluginKey: pendingLocalConnectorAuthRef.current?.target.pluginKey,
+      })
+      const nextInstalled = heldBack.installed
+      const mergedItems = heldBack.items
       setInstalledPlugins(previous =>
         sameInstalledPlugins(previous, nextInstalled) ? previous : nextInstalled
       )
@@ -3334,21 +3340,24 @@ export function PluginsWorkspace({
       // Prefer in-flight cloud rows, then this key's durable cache — never stale
       // previous-account React state after a cache miss / account switch.
       const cloudItems = cloudItemsForMerge ?? cachedCloudItems
-      const heldBack = holdBackInFlightMarketplaceInstalls({
-        items: mergeMarketplaceCatalog(
+      const retained = retainMarketplaceInstalledState({
+        previousItems: pluginMarketplaceStateRef.current.items,
+        nextItems: mergeMarketplaceCatalog(
           cloudItems,
           localRows,
           nextInstalledRaw.map(plugin => plugin.raw)
         ),
-        installed: nextInstalledRaw,
+        previousInstalled: installedPluginsRef.current,
+        nextInstalled: nextInstalledRaw,
+      })
+      const heldBack = holdBackInFlightMarketplaceInstalls({
+        items: retained.items,
+        installed: retained.installed,
         installingIds: installingMarketplacePluginIdsRef.current,
         authPluginKey: pendingLocalConnectorAuthRef.current?.target.pluginKey,
       })
       const nextInstalled = heldBack.installed
-      const mergedItems = retainMarketplaceInstallHints(
-        pluginMarketplaceStateRef.current.items,
-        heldBack.items
-      )
+      const mergedItems = heldBack.items
       // Publish installed rows even when the catalog is still empty — cloud
       // listInstalledPlugins often arrives before marketplace rows.
       if (localStateForMerge || cloudInstalledForMerge) {
@@ -3425,13 +3434,19 @@ export function PluginsWorkspace({
         localState.installedPlugins,
         localState.deviceId || currentDeviceIdRef.current || ''
       ).map(toInstalledPluginItem)
-      const heldBack = holdBackInFlightMarketplaceInstalls({
-        items: mergeMarketplaceCatalog(
+      const retained = retainMarketplaceInstalledState({
+        previousItems: pluginMarketplaceStateRef.current.items,
+        nextItems: mergeMarketplaceCatalog(
           pluginMarketplaceStateRef.current.items.filter(item => !isCodexCatalogItem(item)),
           localRows,
           nextInstalledRaw.map(plugin => plugin.raw)
         ),
-        installed: nextInstalledRaw,
+        previousInstalled: installedPluginsRef.current,
+        nextInstalled: nextInstalledRaw,
+      })
+      const heldBack = holdBackInFlightMarketplaceInstalls({
+        items: retained.items,
+        installed: retained.installed,
         installingIds: installingMarketplacePluginIdsRef.current,
         authPluginKey: pendingLocalConnectorAuthRef.current?.target.pluginKey,
       })
@@ -3440,7 +3455,7 @@ export function PluginsWorkspace({
         sameInstalledPlugins(previous, nextInstalled) ? previous : nextInstalled
       )
       setPluginMarketplaceState(previous => {
-        const nextItems = retainMarketplaceInstallHints(previous.items, heldBack.items)
+        const nextItems = heldBack.items
         if (sameMarketplaceItems(previous.items, nextItems) && !previous.error) {
           return previous
         }
@@ -3531,19 +3546,26 @@ export function PluginsWorkspace({
           localInstalledForMerge,
           localStateForMerge?.deviceId || deviceIdHint || currentDeviceIdRef.current || ''
         ).map(toInstalledPluginItem)
-        const heldBack = holdBackInFlightMarketplaceInstalls({
-          items: mergeMarketplaceCatalog(
+        const retained = retainMarketplaceInstalledState({
+          previousItems: pluginMarketplaceStateRef.current.items,
+          nextItems: mergeMarketplaceCatalog(
             cloudItems,
             localRows,
             nextInstalledRaw.map(plugin => plugin.raw)
           ),
-          installed: nextInstalledRaw,
+          previousInstalled: installedPluginsRef.current,
+          nextInstalled: nextInstalledRaw,
+        })
+        const heldBack = holdBackInFlightMarketplaceInstalls({
+          items: retained.items,
+          installed: retained.installed,
           installingIds: installingMarketplacePluginIdsRef.current,
           authPluginKey: pendingLocalConnectorAuthRef.current?.target.pluginKey,
         })
-        const mergedItems = retainMarketplaceInstallHints(
-          pluginMarketplaceStateRef.current.items,
-          heldBack.items
+        const nextInstalled = heldBack.installed
+        const mergedItems = heldBack.items
+        setInstalledPlugins(previous =>
+          sameInstalledPlugins(previous, nextInstalled) ? previous : nextInstalled
         )
         setPluginMarketplaceState(previous =>
           sameMarketplaceItems(previous.items, mergedItems)
