@@ -12,6 +12,7 @@ from app.api.endpoints import (
     connector_apps,
     connector_runtime,
     deep_research,
+    developer_plugins,
     deliveries,
     device_chat_tasks,
     devices,
@@ -144,6 +145,7 @@ api_router.include_router(
 )
 api_router.include_router(pet.router, prefix="/users/me/pet", tags=["pet"])
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
+api_router.include_router(developer_plugins.router, tags=["developer-plugins"])
 api_router.include_router(groups.router, prefix="/groups", tags=["groups"])
 api_router.include_router(im_sessions.im_router, prefix="/im", tags=["im"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])

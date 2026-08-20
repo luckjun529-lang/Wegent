@@ -117,8 +117,21 @@ WeWork 自研官方插件维护在
 并以 `--visibility public` 发布到「Wework官方」Tab。
 
 布局对齐 openai/plugins：检出后目录为 `<checkout>/plugins/<slug>/`，并在
-`.agents/plugins/marketplace.json` 登记。源码仓只服务开发、评审、CI；
-Backend / Wework **不会**在启动时扫描它。建议与 Wegent 同级检出（例如
+`.agents/plugins/marketplace.json` 登记。源码仓服务开发、评审、CI 和受控发布读取。
+
+仓库由管理员在 Wegent Web 的 **系统管理 → 市场管理 → 插件仓库** 中配置。公开来源首版仅支持 GitHub，发布到 `public`；内部来源首版支持允许列表中的自建 GitLab，发布到 `workspace`。管理员通过仓库级成员授权授予用户或部门 `Reporter`（检查）或 `Developer`（检查并发布）权限。
+
+有权限的开发者从 `/developer/plugins` 发布：选择允许的 Branch/Tag，先检查为完整 commit SHA，再确认仓库、范围、Ref、SHA、slug 和 SemVer。发布任务会重新解析 Ref；如果 Ref 已移动，必须重新检查。Worker 只按固定 SHA 读取清单和插件目录，拒绝符号链接、子模块、Git LFS、越界路径和超限内容，并通过现有安全扫描后生成不可变 `PluginRelease`。同一 slug 首次发布后绑定来源仓库，其他仓库不能接管。
+
+生产启用顺序：
+
+1. 先执行数据库迁移并部署 Backend 与 Celery Worker。
+2. 配置 `PLUGIN_GIT_INTERNAL_ALLOWED_HOSTS`（如有内部 GitLab）。
+3. 在管理页配置、验证仓库并授予成员权限。
+4. 最后设置 `PLUGIN_REPOSITORY_PUBLISH_ENABLED=true` 并部署 Web 入口。
+
+仓库凭据使用 AES 加密保存；API 只返回是否已配置，不返回明文。仓库发布权限与 Wework 本地投稿、`PLUGIN_PUBLISH_USER_IDS` 和社区审核链路相互独立。
+Backend / Wework **不会**在启动时扫描它。传统本地发布联调时可与 Wegent 同级检出（例如
 `wework-plugins-public`）。
 
 若需要把已评审的本地源码树发布到组织目录，可使用

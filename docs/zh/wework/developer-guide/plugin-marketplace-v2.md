@@ -19,6 +19,12 @@ sidebar_position: 20
 - Skill 是展示类型，安装单位始终是 Codex Plugin；单 Skill 插件包含一个 `SKILL.md`。
 - `kinds/InstalledPlugin` 是账号安装意图，`plugin_device_installations` 是设备执行结果，本机 Codex App Server 是运行事实源。
 
+### 受管 Git 仓库发布
+
+`plugin_repositories` 保存管理员固定的 GitHub/GitLab 来源、公开或企业内部范围、允许的 Ref 模式和 AES 加密凭据；仓库级 `ResourceMember` 决定 Reporter/Developer 权限。`plugin_repository_publications` 保存从 Ref 解析出的完整 SHA、插件版本、操作者和异步状态。Worker 在发布前重新解析 Ref，并只读取固定 SHA 下的市场清单和目标插件目录。成功 Release 的扫描 provenance 记录仓库 ID、URL、Ref、SHA 和操作者；失败任务不产生可安装 Release。
+
+详细连接图、时序与不变量见 [Git 仓库插件发布架构](../../architecture/plugin-repository-publication.md)。
+
 ## 2. 数据归属
 
 | 数据                        | 位置                                               | 事实语义                            |

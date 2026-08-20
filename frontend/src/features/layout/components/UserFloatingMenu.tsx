@@ -22,7 +22,9 @@ import {
   ShieldCheckIcon,
   LanguageIcon,
   UsersIcon,
+  CodeBracketSquareIcon,
 } from '@heroicons/react/24/outline'
+import { usePluginPublisherAccess } from '@/hooks/usePluginPublisherAccess'
 
 interface UserFloatingMenuProps {
   className?: string
@@ -37,6 +39,7 @@ export function UserFloatingMenu({ className = '' }: UserFloatingMenuProps) {
 
   const userDisplayName = user?.user_name || t('common:user.default_name')
   const isAdmin = user?.role === 'admin'
+  const hasPluginPublisherAccess = usePluginPublisherAccess(user?.role)
   const currentLanguage = getCurrentLanguage()
   const supportedLanguages = getSupportedLanguages()
   const appVersion = getRuntimeConfigSync().appVersion
@@ -214,6 +217,19 @@ export function UserFloatingMenu({ className = '' }: UserFloatingMenuProps) {
                 {t('common:navigation.admin', 'Admin')}
               </Link>
             </>
+          )}
+
+          {hasPluginPublisherAccess && (
+            <Link
+              href="/developer/plugins"
+              onClick={() => setIsExpanded(false)}
+              role="menuitem"
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-text-primary hover:bg-muted transition-colors duration-150"
+              data-testid="plugin-publisher-floating-menu-link"
+            >
+              <CodeBracketSquareIcon className="w-4 h-4 text-primary" />
+              {t('common:navigation.plugin_publishing', 'Plugin Publishing')}
+            </Link>
           )}
 
           {/* Logout */}

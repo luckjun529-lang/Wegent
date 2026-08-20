@@ -675,6 +675,7 @@ class PluginMarketplaceService:
         featured_rank: int | None = None,
         created_by_user_id: int | None = None,
         provenance: dict[str, Any] | None = None,
+        source_repository_id: int | None = None,
     ) -> PublishedRelease:
         """Publish a WeWork-owned official release."""
         self._validate_slug(slug)
@@ -698,6 +699,23 @@ class PluginMarketplaceService:
                 status_code=409,
                 detail="Plugin slug is owned by a different publisher",
             )
+        if plugin and plugin.source_repository_id not in {
+            None,
+            source_repository_id,
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail="Plugin slug is bound to a different source repository",
+            )
+        if (
+            plugin
+            and plugin.source_repository_id is not None
+            and source_repository_id is None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Repository-managed plugins must be published from their source repository",
+            )
         if plugin and plugin.listing_type != listing_type:
             raise HTTPException(
                 status_code=409, detail="Plugin listing type cannot be changed"
@@ -711,6 +729,7 @@ class PluginMarketplaceService:
                 source_type="native",
                 source_provider="wework",
                 owner_user_id=0,
+                source_repository_id=source_repository_id,
                 keywords_json=[],
                 interface_json={},
                 visibility=visibility,
@@ -718,6 +737,8 @@ class PluginMarketplaceService:
             )
             db.add(plugin)
             db.flush()
+        elif source_repository_id and plugin.source_repository_id is None:
+            plugin.source_repository_id = source_repository_id
         current_release = (
             db.get(PluginRelease, plugin.latest_release_id)
             if plugin.latest_release_id

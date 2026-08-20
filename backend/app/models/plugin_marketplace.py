@@ -129,6 +129,12 @@ class Plugin(Base):
         server_default="0",
         comment="Owner user ID; 0 means platform-owned / unset",
     )
+    source_repository_id = Column(
+        big_integer_id_type(),
+        nullable=True,
+        default=None,
+        comment="Managed source repository ID; null means not repository-managed",
+    )
     category = Column(
         String(50),
         nullable=False,
@@ -219,8 +225,138 @@ class Plugin(Base):
             "status",
         ),
         Index("idx_plugins_source", "source_provider", "source_type"),
+        Index("idx_plugins_source_repository", "source_repository_id"),
         {
             "comment": "Marketplace plugin catalog identities",
+            "mysql_charset": "utf8mb4",
+            "mysql_engine": "InnoDB",
+        },
+    )
+
+
+class PluginRepository(Base):
+    """Administrator-managed Git repository that can publish official plugins."""
+
+    __tablename__ = "plugin_repositories"
+
+    id = Column(big_integer_id_type(), primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, default="", server_default="")
+    provider = Column(
+        String(20), nullable=False, default="github", server_default="github"
+    )
+    repository_url = Column(String(500), nullable=False, default="", server_default="")
+    visibility = Column(
+        String(20), nullable=False, default="workspace", server_default="workspace"
+    )
+    default_ref = Column(
+        String(200), nullable=False, default="main", server_default="main"
+    )
+    marketplace_path = Column(
+        String(300),
+        nullable=False,
+        default=".agents/plugins/marketplace.json",
+        server_default=".agents/plugins/marketplace.json",
+    )
+    allowed_branch_patterns_json = Column(JSON, nullable=False, default=list)
+    allowed_tag_patterns_json = Column(JSON, nullable=False, default=list)
+    credential_encrypted = Column(
+        String(4096), nullable=False, default="", server_default=""
+    )
+    is_internal = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
+    created_by_user_id = Column(
+        big_integer_id_type(), nullable=False, default=0, server_default="0"
+    )
+    last_validated_at = Column(
+        _DATETIME,
+        nullable=False,
+        default=EPOCH_TIME,
+        server_default="1970-01-01 00:00:00.000000",
+    )
+    last_error = Column(String(1000), nullable=False, default="", server_default="")
+    created_at = Column(_DATETIME, nullable=False, default=datetime.now)
+    updated_at = Column(
+        _DATETIME, nullable=False, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (
+        UniqueConstraint("repository_url", name="uniq_plugin_repository_url"),
+        Index("idx_plugin_repositories_enabled", "is_enabled", "visibility"),
+        {
+            "comment": "Trusted Git repositories for official plugin publication",
+            "mysql_charset": "utf8mb4",
+            "mysql_engine": "InnoDB",
+        },
+    )
+
+
+class PluginRepositoryPublication(Base):
+    """Persistent asynchronous publication audit for one repository plugin."""
+
+    __tablename__ = "plugin_repository_publications"
+
+    id = Column(big_integer_id_type(), primary_key=True, autoincrement=True)
+    repository_id = Column(
+        big_integer_id_type(), nullable=False, default=0, server_default="0"
+    )
+    plugin_slug = Column(String(100), nullable=False, default="", server_default="")
+    requested_ref = Column(String(200), nullable=False, default="", server_default="")
+    ref_kind = Column(
+        String(20), nullable=False, default="branch", server_default="branch"
+    )
+    commit_sha = Column(String(64), nullable=False, default="", server_default="")
+    version = Column(String(50), nullable=False, default="", server_default="")
+    status = Column(
+        String(20), nullable=False, default="queued", server_default="queued"
+    )
+    requested_by_user_id = Column(
+        big_integer_id_type(), nullable=False, default=0, server_default="0"
+    )
+    plugin_id = Column(
+        big_integer_id_type(), nullable=False, default=0, server_default="0"
+    )
+    release_id = Column(
+        big_integer_id_type(), nullable=False, default=0, server_default="0"
+    )
+    package_sha256 = Column(String(64), nullable=False, default="", server_default="")
+    error_code = Column(String(100), nullable=False, default="", server_default="")
+    error_message = Column(String(1000), nullable=False, default="", server_default="")
+    created_at = Column(_DATETIME, nullable=False, default=datetime.now)
+    started_at = Column(
+        _DATETIME,
+        nullable=False,
+        default=EPOCH_TIME,
+        server_default="1970-01-01 00:00:00.000000",
+    )
+    finished_at = Column(
+        _DATETIME,
+        nullable=False,
+        default=EPOCH_TIME,
+        server_default="1970-01-01 00:00:00.000000",
+    )
+    updated_at = Column(
+        _DATETIME, nullable=False, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_plugin_repo_publications_queue",
+            "status",
+            "created_at",
+        ),
+        Index(
+            "idx_plugin_repo_publications_repo_slug",
+            "repository_id",
+            "plugin_slug",
+            "created_at",
+        ),
+        Index(
+            "idx_plugin_repo_publications_requester",
+            "requested_by_user_id",
+            "created_at",
+        ),
+        {
+            "comment": "Git repository plugin publication jobs and audit trail",
             "mysql_charset": "utf8mb4",
             "mysql_engine": "InnoDB",
         },

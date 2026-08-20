@@ -28,6 +28,7 @@ from app.models.plugin_marketplace import (
     Plugin,
     PluginDeviceInstallation,
     PluginRelease,
+    PluginRepository,
     PluginSubmission,
     PluginUpstream,
 )
@@ -642,6 +643,77 @@ def test_official_package_build_is_deterministic_and_publish_is_idempotent(
         "buildUrl": "https://ci.example/build/1",
         "publisher": "release-bot",
     }
+
+
+def test_repository_publish_binds_official_plugin_to_source_repository(
+    test_db, monkeypatch, tmp_path
+):
+    source = _write_official_source(tmp_path / "official-review")
+    repository = PluginRepository(
+        name="Public plugins",
+        provider="github",
+        repository_url="https://github.com/wecode-ai/wework-plugins",
+        visibility="public",
+        default_ref="main",
+        marketplace_path=".agents/plugins/marketplace.json",
+        allowed_branch_patterns_json=["main"],
+        allowed_tag_patterns_json=["v*"],
+        is_internal=False,
+        is_enabled=True,
+    )
+    test_db.add(repository)
+    test_db.commit()
+    stored_packages: dict[str, bytes] = {}
+    _mock_package_storage(monkeypatch, stored_packages)
+
+    _, published = OfficialPluginPublisher().publish_directory(
+        test_db,
+        source_directory=source,
+        source_repository_id=repository.id,
+    )
+
+    plugin = test_db.get(Plugin, published.release.plugin_id)
+    assert plugin.source_repository_id == repository.id
+
+
+def test_repository_publish_rejects_slug_bound_to_another_repository(
+    test_db, monkeypatch, tmp_path
+):
+    source = _write_official_source(tmp_path / "official-review")
+    repositories = [
+        PluginRepository(
+            name=f"Repository {index}",
+            provider="github",
+            repository_url=f"https://github.com/wecode-ai/plugins-{index}",
+            visibility="public",
+            default_ref="main",
+            marketplace_path=".agents/plugins/marketplace.json",
+            allowed_branch_patterns_json=["main"],
+            allowed_tag_patterns_json=["v*"],
+            is_internal=False,
+            is_enabled=True,
+        )
+        for index in range(2)
+    ]
+    test_db.add_all(repositories)
+    test_db.commit()
+    stored_packages: dict[str, bytes] = {}
+    _mock_package_storage(monkeypatch, stored_packages)
+    publisher = OfficialPluginPublisher()
+    publisher.publish_directory(
+        test_db,
+        source_directory=source,
+        source_repository_id=repositories[0].id,
+    )
+
+    with pytest.raises(HTTPException, match="different source repository"):
+        publisher.publish_directory(
+            test_db,
+            source_directory=source,
+            source_repository_id=repositories[1].id,
+        )
+
+    assert test_db.query(PluginRelease).count() == 1
 
 
 def test_official_publish_rejects_same_version_with_different_package(

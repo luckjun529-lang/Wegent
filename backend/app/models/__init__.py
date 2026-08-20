@@ -41,6 +41,8 @@ from app.models.plugin_marketplace import (
     Plugin,
     PluginDeviceInstallation,
     PluginRelease,
+    PluginRepository,
+    PluginRepositoryPublication,
     PluginSubmission,
     PluginUpstream,
 )
@@ -107,6 +109,8 @@ __all__ = [
     "ProjectChatMessage",
     "Plugin",
     "PluginRelease",
+    "PluginRepository",
+    "PluginRepositoryPublication",
     "PluginUpstream",
     "PluginSubmission",
     "PluginDeviceInstallation",

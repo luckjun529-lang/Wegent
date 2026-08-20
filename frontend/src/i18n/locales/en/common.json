@@ -125,7 +125,8 @@
     "settings": "Settings",
     "docs": "Docs",
     "feedback": "Feedback",
-    "admin": "Admin"
+    "admin": "Admin",
+    "plugin_publishing": "Plugin Publishing"
   },
   "sidebar": {
     "recent_visits": "Recent Visits",

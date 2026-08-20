@@ -118,8 +118,22 @@ and publish to the Wework official tab with `--visibility public`.
 
 Layout matches openai/plugins: after checkout each plugin is
 `<checkout>/plugins/<slug>/`, registered in `.agents/plugins/marketplace.json`.
-That repository is for development, review, and CI only. Backend and Wework
-**do not** scan it at startup. Check it out as a sibling of Wegent (for example
+
+Administrators configure repositories in Wegent Web under **System Administration → Marketplace → Plugin repositories**. V1 accepts public GitHub sources for `public` publication and allowlisted self-hosted GitLab sources for `workspace` publication. Repository members grant users or departments `Reporter` access to inspect, or `Developer` access to inspect and publish.
+
+Authorized developers publish at `/developer/plugins`: select an allowed branch or tag, inspect it to a full commit SHA, then confirm repository, scope, ref, SHA, slug, and SemVer. The worker resolves the ref again and rejects a moved ref. It reads only the manifest and selected plugin tree at the pinned SHA, rejects path escapes, symlinks, submodules, Git LFS, and oversized content, then creates an immutable `PluginRelease` only after the existing security scan passes. A slug binds to its first source repository and cannot be taken over by another repository.
+
+Production rollout order:
+
+1. Run the migration and deploy Backend plus the Celery worker.
+2. Configure `PLUGIN_GIT_INTERNAL_ALLOWED_HOSTS` when internal GitLab is used.
+3. Configure and validate repositories and grant repository members.
+4. Set `PLUGIN_REPOSITORY_PUBLISH_ENABLED=true`, then expose the Web entry.
+
+Repository credentials are AES-encrypted; APIs return only whether a credential exists. Repository publication authorization is separate from local Wework submissions, `PLUGIN_PUBLISH_USER_IDS`, and community review.
+
+That repository is for development, review, CI, and controlled publication reads. Backend and Wework
+**do not** scan it at startup. For legacy local publication testing, check it out as a sibling of Wegent (for example
 `wework-plugins-public`).
 
 Use `--visibility workspace` only for a deployment-local reviewed source tree

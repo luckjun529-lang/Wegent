@@ -39,6 +39,7 @@ import { ResourceIcon } from '@/features/resource-library/components/ResourceIco
 import { useToast } from '@/hooks/use-toast'
 import { useTranslation } from '@/hooks/useTranslation'
 import { cn } from '@/lib/utils'
+import PluginRepositoryManagement from './PluginRepositoryManagement'
 
 const PAGE_SIZE = 50
 const FEATURED_RECOMMENDATION_SCORE = 80
@@ -294,6 +295,10 @@ export default function MarketplaceManagement() {
         </h2>
         <p className="mt-1 text-sm text-text-muted">{t('marketplace_management.description')}</p>
       </div>
+
+      <PluginRepositoryManagement />
+
+      <div className="border-t border-border pt-5" />
 
       <Tabs value={resourceType} onValueChange={handleTypeChange}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

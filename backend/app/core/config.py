@@ -590,6 +590,8 @@ class Settings(BaseSettings):
     PLUGIN_PUBLISH_ENABLED: bool = False
     PLUGIN_PUBLISH_USER_IDS: list[int] = []
     PLUGIN_LEGACY_UPLOAD_ENABLED: bool = False
+    PLUGIN_REPOSITORY_PUBLISH_ENABLED: bool = False
+    PLUGIN_GIT_INTERNAL_ALLOWED_HOSTS: list[str] = []
 
     # Attachment encryption configuration
     # Enable/disable AES-256-CBC encryption for attachment binary data

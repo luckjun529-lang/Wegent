@@ -12,6 +12,12 @@ Marketplace V2 uses a Wework cloud control plane with a local Codex runtime. MyS
 
 The regular user sees only the Wework cloud catalog. Codex plugins are mirrored only after an administrator selects them. Local creations live in the `wework-personal` marketplace and are uploaded only after an explicit publish or owner-initiated restricted share. A Skill is represented as a Codex plugin containing exactly one Skill.
 
+### Managed Git repository publication
+
+`plugin_repositories` stores administrator-pinned GitHub/GitLab sources, public or workspace scope, allowed ref patterns, and AES-encrypted credentials. Repository `ResourceMember` rows provide Reporter/Developer authorization. `plugin_repository_publications` records the full SHA resolved from a ref, plugin version, operator, and asynchronous state. Before publishing, the worker resolves the ref again and reads only the marketplace manifest and target plugin tree at the pinned SHA. Successful Release scan provenance includes repository ID, URL, ref, SHA, and operator; failed jobs do not create an installable Release.
+
+See [Git Repository Plugin Publication](../../architecture/plugin-repository-publication.md) for the connection graph, sequence, ownership, and invariants.
+
 ## Storage model
 
 | Data                                      | Location                                                          |

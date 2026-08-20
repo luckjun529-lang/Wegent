@@ -27,3 +27,37 @@ def sync_plugin_upstreams() -> dict[str, int]:
             items = plugin_marketplace_service.sync_enabled_upstreams(db)
             logger.info("Synchronized %s plugin upstreams", len(items))
             return {"synced": len(items), "skipped": 0}
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.plugin_marketplace_tasks.publish_plugin_repository_release",
+    max_retries=360,
+)
+def publish_plugin_repository_release(self, publication_id: int) -> dict[str, int]:
+    """Publish one plugin from a commit-pinned managed repository."""
+    from app.core.distributed_lock import distributed_lock
+    from app.db.session import get_db_session
+    from app.models.plugin_marketplace import PluginRepositoryPublication
+    from app.services.plugin_repository_service import plugin_repository_service
+
+    with get_db_session() as db:
+        publication = db.get(PluginRepositoryPublication, publication_id)
+        if not publication:
+            return {"published": 0, "missing": 1}
+        lock_name = (
+            f"plugin_repository_publish:{publication.repository_id}:"
+            f"{publication.plugin_slug}"
+        )
+    with distributed_lock.acquire_context(
+        lock_name, expire_seconds=60 * 30
+    ) as acquired:
+        if not acquired:
+            raise self.retry(
+                exc=RuntimeError("Plugin publication is already running"), countdown=5
+            )
+        with get_db_session() as db:
+            plugin_repository_service.process_publication(db, publication_id)
+            updated = db.get(PluginRepositoryPublication, publication_id)
+            published = int(bool(updated and updated.status == "published"))
+    return {"published": published, "missing": 0}

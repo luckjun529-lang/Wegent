@@ -13,6 +13,8 @@ import { useTranslation } from '@/hooks/useTranslation'
 import { DocsButton } from '@/features/layout/DocsButton'
 import { ThemeToggle } from '@/features/theme/ThemeToggle'
 import { Cog8ToothIcon } from '@heroicons/react/24/outline'
+import { CodeBracketSquareIcon } from '@heroicons/react/24/outline'
+import { usePluginPublisherAccess } from '@/hooks/usePluginPublisherAccess'
 
 type UserMenuProps = {
   className?: string
@@ -23,6 +25,7 @@ export default function UserMenu({ className = '' }: UserMenuProps) {
   const { user, logout } = useUser()
   const userDisplayName = user?.user_name || t('common:user.default_name')
   const isAdmin = user?.role === 'admin'
+  const hasPluginPublisherAccess = usePluginPublisherAccess(user?.role)
 
   return (
     <div className={className}>
@@ -56,6 +59,27 @@ export default function UserMenu({ className = '' }: UserMenuProps) {
                     >
                       <Cog8ToothIcon className="w-3.5 h-3.5" />
                       {t('common:navigation.admin', 'Admin')}
+                    </Button>
+                  </Link>
+                )}
+              </Menu.Item>
+            </>
+          )}
+          {hasPluginPublisherAccess && (
+            <>
+              <div className="my-1 h-px bg-border/60" />
+              <Menu.Item>
+                {({ active }) => (
+                  <Link href="/developer/plugins">
+                    <Button
+                      variant="ghost"
+                      className={`!w-full !text-left !px-2 !py-1.5 !text-xs !text-text-primary flex items-center gap-2 ${
+                        active ? '!bg-muted' : '!bg-transparent'
+                      }`}
+                      data-testid="plugin-publisher-menu-link"
+                    >
+                      <CodeBracketSquareIcon className="w-3.5 h-3.5" />
+                      {t('common:navigation.plugin_publishing', 'Plugin Publishing')}
                     </Button>
                   </Link>
                 )}

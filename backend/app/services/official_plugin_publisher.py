@@ -55,22 +55,37 @@ class OfficialPluginPublisher:
         root = source_directory.resolve()
         if not root.is_dir():
             raise ValueError(f"Official plugin source is not a directory: {root}")
+        files = {
+            path.relative_to(root).as_posix(): (
+                path.read_bytes(),
+                bool(path.stat().st_mode & 0o111),
+            )
+            for path in self._source_files(root)
+        }
+        return self.build_package_from_files(files)
+
+    def build_package_from_files(
+        self,
+        files: dict[str, bytes | tuple[bytes, bool]],
+    ) -> OfficialPluginPackage:
+        """Build the same deterministic package from provider-fetched files."""
+        if not files:
+            raise ValueError("Official plugin source is empty")
         output = io.BytesIO()
         with zipfile.ZipFile(
-            output,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-            compresslevel=9,
+            output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
         ) as archive:
-            for path in self._source_files(root):
-                relative = path.relative_to(root).as_posix()
+            for relative in sorted(files):
+                value = files[relative]
+                content, executable = (
+                    value if isinstance(value, tuple) else (value, False)
+                )
                 info = zipfile.ZipInfo(relative, ZIP_TIMESTAMP)
                 info.create_system = 3
-                executable = bool(path.stat().st_mode & 0o111)
                 permissions = 0o755 if executable else 0o644
                 info.external_attr = (permissions & 0xFFFF) << 16
                 info.compress_type = zipfile.ZIP_DEFLATED
-                archive.writestr(info, path.read_bytes(), compresslevel=9)
+                archive.writestr(info, content, compresslevel=9)
         package = output.getvalue()
         scan_report = scan_plugin_package(package)
         parsed = plugin_package_parser.parse_package(package)
@@ -100,6 +115,7 @@ class OfficialPluginPublisher:
         featured_rank: int | None = None,
         created_by_user_id: int | None = None,
         provenance: dict[str, Any] | None = None,
+        source_repository_id: int | None = None,
     ) -> tuple[OfficialPluginPackage, PublishedRelease]:
         built = self.build_package(source_directory)
         result = self.publish_package(
@@ -111,6 +127,7 @@ class OfficialPluginPublisher:
             featured_rank=featured_rank,
             created_by_user_id=created_by_user_id,
             provenance=provenance,
+            source_repository_id=source_repository_id,
         )
         return built, result
 
@@ -125,6 +142,7 @@ class OfficialPluginPublisher:
         featured_rank: int | None = None,
         created_by_user_id: int | None = None,
         provenance: dict[str, Any] | None = None,
+        source_repository_id: int | None = None,
     ) -> PublishedRelease:
         """Publish an already-built package without rebuilding CI input."""
         result = self.marketplace_service.publish_official_release(
@@ -136,6 +154,7 @@ class OfficialPluginPublisher:
             featured_rank=featured_rank,
             created_by_user_id=created_by_user_id,
             provenance=provenance,
+            source_repository_id=source_repository_id,
         )
         return result
 

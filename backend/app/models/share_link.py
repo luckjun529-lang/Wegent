@@ -25,6 +25,7 @@ class ResourceType(str, PyEnum):
     TASK = "Task"
     KNOWLEDGE_BASE = "KnowledgeBase"
     PLUGIN = "Plugin"
+    PLUGIN_REPOSITORY = "PluginRepository"
     PROJECT = "Project"
     CLOUD_PROJECT = "CloudProject"
 
