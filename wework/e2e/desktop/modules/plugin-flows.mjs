@@ -57,6 +57,7 @@ import {
 } from './workspace-flows.mjs'
 
 async function createDirectRemoteMcpPluginZip(root) {
+  // Core and Cloud shards load this module without installing Node workspace dependencies.
   const { default: JSZip } = await import('jszip')
   const archivePath = join(root, 'direct-remote-mcp-plugin.zip')
   const zip = new JSZip()
