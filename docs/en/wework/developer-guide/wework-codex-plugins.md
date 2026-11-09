@@ -35,6 +35,8 @@ When Wework is connected to Wegent cloud, the plugin page also displays the Back
 
 Cloud synchronization commits the package replacement, both runtime caches, registries, and configuration files as one local transaction. Extraction, parsing, or write failures restore the pre-sync state so an update cannot leave a new package paired with old runtime metadata, and removal cannot stop halfway. Connector `localAuth` remains a separate Wework step after package synchronization and is not bypassed by local materialization.
 
+Windows migration and recovery compare directory paths by components, preserve separator formatting in metadata, and reject ownership by another installation at the same path. Recovery journals flush through writable handles. Directory-link snapshots preserve targets that have moved or are temporarily missing, and link removal leaves the target untouched. Authorization and history subprocesses in tests must also exit before their directories are cleaned up.
+
 ### Desktop Bundled Plugin Upgrades and Recovery
 
 After startup becomes ready, macOS and Windows asynchronously check `wework-space`, `smart-app-builder`, and `wework-plugin-developer`; entering the workbench does not wait for upgrades. Checks compare both the version and complete file contents, so script fixes within the same version also reach the installed cache. Current plugins with existing configuration remain usable during unrelated work. Only cache or configuration mutations wait for active tasks and Codex requests to finish.

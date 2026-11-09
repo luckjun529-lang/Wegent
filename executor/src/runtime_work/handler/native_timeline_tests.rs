@@ -106,6 +106,7 @@ async fn read_and_stop(handler: &mut RuntimeWorkRpcHandler) -> Result<Value, App
         .request("test/stop", json!({}))
         .await
         .unwrap();
+    handler.codex_app_server.restart().await;
     result
 }
 
@@ -205,6 +206,7 @@ async fn native_timeline_only_restores_user_presentations_on_their_own_page() {
         .request("test/stop", json!({}))
         .await
         .unwrap();
+    handler.codex_app_server.restart().await;
     let (latest, earlier) = responses.unwrap();
     assert_eq!(latest["turns"][0]["items"].as_array().unwrap().len(), 1);
     assert_eq!(latest["turns"][0]["items"][0]["type"], "assistant_text");

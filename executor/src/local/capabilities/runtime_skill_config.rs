@@ -30,7 +30,7 @@ pub(super) fn relocate_plugin_skill_config(
     if let Some(tables) = config.as_array_of_tables_mut() {
         let mut targets = tables
             .iter()
-            .filter_map(|entry| entry.get("path").and_then(Item::as_str).map(str::to_owned))
+            .filter_map(|entry| entry.get("path").and_then(Item::as_str).map(PathBuf::from))
             .collect::<BTreeSet<_>>();
         let mut redundant = Vec::new();
         for (index, entry) in tables.iter_mut().enumerate() {
@@ -40,7 +40,7 @@ pub(super) fn relocate_plugin_skill_config(
             let Some(target) = relocated_skill_path(path, spec, current_runtime)? else {
                 continue;
             };
-            if targets.insert(target.clone()) {
+            if targets.insert(PathBuf::from(&target)) {
                 entry["path"] = value(target);
             } else {
                 redundant.push(index);
@@ -57,7 +57,7 @@ pub(super) fn relocate_plugin_skill_config(
                     .as_inline_table()
                     .and_then(|entry| entry.get("path"))
                     .and_then(toml_edit::Value::as_str)
-                    .map(str::to_owned)
+                    .map(PathBuf::from)
             })
             .collect::<BTreeSet<_>>();
         let mut redundant = Vec::new();
@@ -71,7 +71,7 @@ pub(super) fn relocate_plugin_skill_config(
             let Some(target) = relocated_skill_path(path, spec, current_runtime)? else {
                 continue;
             };
-            if targets.insert(target.clone()) {
+            if targets.insert(PathBuf::from(&target)) {
                 entry.insert("path", target.into());
             } else {
                 redundant.push(index);
@@ -180,8 +180,8 @@ mod tests {
             .get(0)
             .unwrap();
         assert_eq!(
-            entry["path"].as_str(),
-            runtime.join("skills/feature/SKILL.md").to_str()
+            entry["path"].as_str().map(Path::new),
+            Some(runtime.join("skills/feature/SKILL.md").as_path())
         );
         assert_eq!(entry["enabled"].as_bool(), Some(false));
         assert!(!temp.path().join("removed").exists());
